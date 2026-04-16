@@ -59,6 +59,13 @@ load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", os.urandom(24).hex())
+# Cookies must be SameSite=None + Secure so they work inside Replit's preview iframe
+# (the workspace hosts the app in a cross-site <iframe>).
+app.config.update(
+    SESSION_COOKIE_SAMESITE="None",
+    SESSION_COOKIE_SECURE=True,
+    SESSION_COOKIE_HTTPONLY=True,
+)
 app.permanent_session_lifetime = timedelta(days=auth.SESSION_DAYS)
 
 # Initialize auth DB at startup
