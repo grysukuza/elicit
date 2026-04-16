@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Clinical Decision Support</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <h1>&#x1F489; Clinical Decision Support</h1>
+      <p class="tagline">Evidence-based answers with probability estimates &mdash; powered by Elicit &amp; Claude</p>
+    </div>
+  </header>
+
+  <main>
+    <!-- ── Input panel ───────────────────────────────────────────── -->
+    <section class="card" id="input-panel">
+      <h2>Enter Clinical Question</h2>
+      <p class="hint">Describe the patient, situation, and what you want to know.
+         The system will extract PICO elements and search 138M+ papers.</p>
+      <textarea id="query-text"
+                placeholder="e.g. 65-year-old man with newly diagnosed atrial fibrillation and CHA2DS2-VASc score of 3. Should he receive anticoagulation with a DOAC vs. warfarin to prevent stroke?"
+                rows="5"></textarea>
+      <div class="btn-row">
+        <button id="analyze-btn" class="btn-primary" onclick="runAnalysis()">
+          Analyze
+        </button>
+      </div>
+    </section>
+
+    <!-- ── Spinner ───────────────────────────────────────────────── -->
+    <div id="spinner" class="hidden">
+      <div class="spinner-ring"></div>
+      <p id="spinner-msg">Parsing clinical question&hellip;</p>
+    </div>
+
+    <!-- ── Results panel ─────────────────────────────────────────── -->
+    <section class="card hidden" id="results-panel">
+
+      <!-- PICO -->
+      <div class="result-section">
+        <h2>Clinical Question (PICO)</h2>
+        <p id="pico-statement" class="pico-box"></p>
+        <div class="pico-grid" id="pico-grid"></div>
+      </div>
+
+      <!-- Bottom line -->
+      <div class="result-section">
+        <h2>Clinical Bottom Line</h2>
+        <div class="bottom-line-box" id="bottom-line"></div>
+      </div>
+
+      <!-- Evidence summary -->
+      <div class="result-section">
+        <h2>Evidence Summary</h2>
+        <p class="evidence-quality" id="evidence-quality"></p>
+        <div id="summary-text"></div>
+      </div>
+
+      <!-- Probability estimates -->
+      <div class="result-section" id="prob-section">
+        <h2>Probability Estimates</h2>
+        <table class="prob-table" id="prob-table">
+          <thead><tr><th>Metric</th><th>Value</th></tr></thead>
+          <tbody id="prob-body"></tbody>
+        </table>
+        <p class="prob-note hidden" id="prob-note"></p>
+      </div>
+
+      <!-- Limitations -->
+      <div class="result-section" id="limits-section">
+        <h2>Limitations</h2>
+        <p id="limitations-text"></p>
+      </div>
+
+      <!-- References -->
+      <div class="result-section">
+        <h2>References</h2>
+        <ol id="references-list" class="ref-list"></ol>
+      </div>
+
+      <!-- Action bar -->
+      <div class="action-bar">
+        <a id="pdf-link" href="#" class="btn-secondary" target="_blank">
+          &#x1F4C4; Download PDF
+        </a>
+        <div class="email-group">
+          <input type="email" id="email-input" placeholder="physician@hospital.org" />
+          <button class="btn-secondary" onclick="sendEmail()">&#x2709; Email Report</button>
+        </div>
+        <span id="email-status" class="email-status"></span>
+      </div>
+
+    </section>
+
+    <!-- ── Error panel ───────────────────────────────────────────── -->
+    <div class="error-box hidden" id="error-box"></div>
+  </main>
+
+  <footer>
+    <p>
+      DISCLAIMER: AI-assisted decision support tool. Not a substitute for clinical judgement.
+      Always verify findings against primary literature.
+    </p>
+  </footer>
+
+  <script>
+    let currentResultId = null;
+
+    async function runAnalysis() {
+      const text = document.getElementById('query-text').value.trim();
+      if (!text) { showError('Please enter a clinical question.'); return; }
+
+      setSpinner(true, 'Parsing clinical question\u2026');
+      hideResults();
+      hideError();
+
+      let data;
+      try {
+        setSpinner(true, 'Searching 138M+ papers via Elicit\u2026');
+        const resp = await fetch('/analyze', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({text}),
+        });
+        data = await resp.json();
+        if (!resp.ok) { throw new Error(data.error || 'Server error'); }
+      } catch (e) {
+        setSpinner(false);
+        showError(e.message);
+        return;
+      }
+
+      setSpinner(false);
+      currentResultId = data.result_id;
+      renderResults(data);
+    }
+
+    function renderResults(data) {
+      const cq  = data.clinical_question || {};
+      const res = data.result || {};
+      const est = res.probability_estimates || {};
+
+      // PICO statement
+      document.getElementById('pico-statement').textContent = res.pico_statement || '';
+
+      // PICO grid
+      const grid = document.getElementById('pico-grid');
+      grid.innerHTML = '';
+      const picoFields = [
+        ['Population', cq.population],
+        ['Intervention', cq.intervention],
+        ['Comparison', cq.comparison],
+        ['Outcome', cq.outcome],
+        ['Time frame', cq.timeframe],
+        ['Context', cq.context],
+        ['Question type', cq.question_type],
+      ];
+      picoFields.forEach(([label, val]) => {
+        if (val) {
+          const el = document.createElement('div');
+          el.className = 'pico-item';
+          el.innerHTML = `<span class="pico-label">${label}</span><span>${escHtml(val)}</span>`;
+          grid.appendChild(el);
+        }
+      });
+
+      // Bottom line
+      document.getElementById('bottom-line').textContent = res.clinical_bottom_line || '';
+
+      // Evidence quality
+      document.getElementById('evidence-quality').textContent =
+        'Evidence quality: ' + (res.evidence_quality || '');
+
+      // Summary paragraphs
+      const summaryDiv = document.getElementById('summary-text');
+      summaryDiv.innerHTML = '';
+      (res.summary || '').split('\n\n').forEach(para => {
+        if (para.trim()) {
+          const p = document.createElement('p');
+          p.textContent = para.trim();
+          summaryDiv.appendChild(p);
+        }
+      });
+
+      // Probability table
+      const tbody = document.getElementById('prob-body');
+      tbody.innerHTML = '';
+      const metrics = [
+        ['control_event_rate',       'Control Event Rate (CER)',             'pct'],
+        ['treatment_event_rate',     'Treatment Event Rate (EER)',            'pct'],
+        ['arr',                      'Absolute Risk Reduction (ARR)',         'pct'],
+        ['rrr',                      'Relative Risk Reduction (RRR)',         'pct'],
+        ['nnt',                      'Number Needed to Treat (NNT)',          'f1'],
+        ['sensitivity',              'Sensitivity',                           'pct'],
+        ['specificity',              'Specificity',                           'pct'],
+        ['prevalence',               'Pre-test Probability (Prevalence)',     'pct'],
+        ['ppv',                      'Positive Predictive Value (PPV)',       'pct'],
+        ['npv',                      'Negative Predictive Value (NPV)',       'pct'],
+        ['lr_positive',              'Positive Likelihood Ratio (LR+)',       'f2'],
+        ['lr_negative',              'Negative Likelihood Ratio (LR\u2212)',  'f3'],
+        ['post_test_prob_positive',  'Post-test Prob (test positive)',        'pct'],
+        ['post_test_prob_negative',  'Post-test Prob (test negative)',        'pct'],
+      ];
+      let anyMetric = false;
+      metrics.forEach(([key, label, fmt]) => {
+        const val = est[key];
+        if (val !== undefined && val !== null) {
+          anyMetric = true;
+          const tr = document.createElement('tr');
+          tr.innerHTML = `<td>${label}</td><td>${formatVal(val, fmt)}</td>`;
+          tbody.appendChild(tr);
+        }
+      });
+      document.getElementById('prob-section').classList.toggle('hidden', !anyMetric);
+
+      if (est.notes) {
+        const note = document.getElementById('prob-note');
+        note.textContent = 'Note: ' + est.notes;
+        note.classList.remove('hidden');
+      }
+
+      // Limitations
+      const lim = res.limitations || '';
+      document.getElementById('limitations-text').textContent = lim;
+      document.getElementById('limits-section').classList.toggle('hidden', !lim);
+
+      // References
+      const ol = document.getElementById('references-list');
+      ol.innerHTML = '';
+      (res.papers_used || []).forEach(p => {
+        const li = document.createElement('li');
+        const authors = (p.authors || []).slice(0, 3).join(', ') +
+                        ((p.authors || []).length > 3 ? ' et al.' : '');
+        const urls = p.urls || [];
+        const link = urls.length
+          ? ` <a href="${urls[0]}" target="_blank" rel="noopener">[link]</a>`
+          : '';
+        li.innerHTML = `${escHtml(authors)} (${p.year || ''}). <em>${escHtml(p.title || '')}</em>. ${escHtml(p.venue || '')}.${link}`;
+        ol.appendChild(li);
+      });
+
+      // PDF link
+      document.getElementById('pdf-link').href = `/download?result_id=${currentResultId}`;
+
+      document.getElementById('results-panel').classList.remove('hidden');
+      document.getElementById('results-panel').scrollIntoView({behavior: 'smooth'});
+    }
+
+    async function sendEmail() {
+      const email = document.getElementById('email-input').value.trim();
+      const status = document.getElementById('email-status');
+      if (!email) { status.textContent = 'Please enter an email address.'; return; }
+      if (!currentResultId) { status.textContent = 'Run an analysis first.'; return; }
+      status.textContent = 'Sending\u2026';
+      try {
+        const resp = await fetch('/send-email', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({email, result_id: currentResultId}),
+        });
+        const data = await resp.json();
+        status.textContent = data.message || data.error || 'Done.';
+      } catch (e) {
+        status.textContent = 'Failed: ' + e.message;
+      }
+    }
+
+    function setSpinner(show, msg) {
+      document.getElementById('spinner').classList.toggle('hidden', !show);
+      if (msg) document.getElementById('spinner-msg').textContent = msg;
+      document.getElementById('analyze-btn').disabled = show;
+    }
+
+    function hideResults() {
+      document.getElementById('results-panel').classList.add('hidden');
+    }
+
+    function showError(msg) {
+      const el = document.getElementById('error-box');
+      el.textContent = msg;
+      el.classList.remove('hidden');
+    }
+
+    function hideError() {
+      document.getElementById('error-box').classList.add('hidden');
+    }
+
+    function escHtml(str) {
+      return String(str)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    function formatVal(val, fmt) {
+      if (fmt === 'pct') return (val * 100).toFixed(1) + '%';
+      if (fmt === 'f1')  return val.toFixed(1);
+      if (fmt === 'f2')  return val.toFixed(2);
+      if (fmt === 'f3')  return val.toFixed(3);
+      return val;
+    }
+  </script>
+</body>
+</html>
