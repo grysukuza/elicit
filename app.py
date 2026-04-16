@@ -32,6 +32,7 @@ from dotenv import load_dotenv
 
 from pipeline import run_pipeline
 from pdf_generator import generate_pdf
+from paper_evaluator import evaluate_paper, papers_to_bibtex, papers_to_ris
 
 load_dotenv()
 
@@ -83,6 +84,77 @@ def download():
         mimetype="application/pdf",
         as_attachment=True,
         download_name="clinical_report.pdf",
+    )
+
+
+@app.route("/evaluate-paper", methods=["POST"])
+def evaluate_paper_route():
+    """Run a critical appraisal on a single referenced paper."""
+    data = request.get_json(silent=True) or {}
+    result_id = data.get("result_id") or session.get("result_id")
+    paper_index = data.get("paper_index")
+
+    if result_id is None or result_id not in _result_store:
+        return jsonify({"error": "No result available. Run an analysis first."}), 404
+    if paper_index is None:
+        return jsonify({"error": "paper_index required."}), 400
+
+    output = _result_store[result_id]
+    papers = output.get("result", {}).get("papers_used", [])
+
+    try:
+        idx = int(paper_index)
+    except (TypeError, ValueError):
+        return jsonify({"error": "paper_index must be an integer."}), 400
+
+    if idx < 0 or idx >= len(papers):
+        return jsonify({"error": "paper_index out of range."}), 400
+
+    paper = papers[idx]
+
+    # Cache appraisals on the stored result so re-requests are instant
+    cache = output.setdefault("appraisals", {})
+    cache_key = str(idx)
+    if cache_key in cache:
+        return jsonify({"appraisal": cache[cache_key], "cached": True})
+
+    try:
+        appraisal = evaluate_paper(paper)
+    except Exception:
+        app.logger.exception("Appraisal error")
+        return jsonify({"error": "Failed to perform appraisal. Please try again."}), 500
+
+    cache[cache_key] = appraisal
+    return jsonify({"appraisal": appraisal, "cached": False})
+
+
+@app.route("/download-references")
+def download_references():
+    """Export references as BibTeX or RIS for reference managers."""
+    fmt = (request.args.get("format") or "bibtex").lower()
+    result_id = request.args.get("result_id") or session.get("result_id")
+
+    if not result_id or result_id not in _result_store:
+        return "No result available. Run an analysis first.", 404
+
+    papers = _result_store[result_id].get("result", {}).get("papers_used", [])
+    if not papers:
+        return "No references available.", 404
+
+    if fmt == "ris":
+        body = papers_to_ris(papers)
+        mimetype = "application/x-research-info-systems"
+        filename = "references.ris"
+    else:
+        body = papers_to_bibtex(papers)
+        mimetype = "application/x-bibtex"
+        filename = "references.bib"
+
+    return send_file(
+        io.BytesIO(body.encode("utf-8")),
+        mimetype=mimetype,
+        as_attachment=True,
+        download_name=filename,
     )
 
 

@@ -297,7 +297,7 @@ def run_meta_analysis(
                 "authors": p.get("authors") or [],
                 "year": p.get("year"),
                 "venue": p.get("venue", ""),
-                "abstract": (p.get("abstract") or "")[:300],
+                "abstract": (p.get("abstract") or "")[:2500],
                 "urls": urls,
                 "pmid": p.get("pmid"),
                 "doi": doi,

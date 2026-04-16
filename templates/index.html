@@ -77,14 +77,26 @@
 
       <!-- References -->
       <div class="result-section">
-        <h2>References</h2>
-        <ol id="references-list" class="ref-list"></ol>
+        <div class="ref-header">
+          <h2>References &amp; Critical Appraisal</h2>
+          <div class="ref-export hidden" id="ref-export">
+            <span class="export-label">Export citations:</span>
+            <a id="bibtex-link" href="#" class="chip-link" target="_blank">BibTeX</a>
+            <a id="ris-link" href="#" class="chip-link" target="_blank">RIS</a>
+          </div>
+        </div>
+        <p class="hint" id="ref-hint">
+          Click a reference to open the article. Use &ldquo;Appraise&rdquo; to evaluate
+          the study using Oxford CEBM, GRADE, Jadad, QUADAS-2, or Newcastle&ndash;Ottawa
+          frameworks.
+        </p>
+        <div id="references-list" class="ref-cards"></div>
       </div>
 
       <!-- Action bar -->
       <div class="action-bar">
         <a id="pdf-link" href="#" class="btn-secondary" target="_blank">
-          &#x1F4C4; Download PDF
+          &#x1F4C4; Download PDF Report
         </a>
         <div class="email-group">
           <input type="email" id="email-input" placeholder="physician@hospital.org" />
@@ -227,26 +239,246 @@
       document.getElementById('limitations-text').textContent = lim;
       document.getElementById('limits-section').classList.toggle('hidden', !lim);
 
-      // References
-      const ol = document.getElementById('references-list');
-      ol.innerHTML = '';
-      (res.papers_used || []).forEach(p => {
-        const li = document.createElement('li');
-        const authors = (p.authors || []).slice(0, 3).join(', ') +
-                        ((p.authors || []).length > 3 ? ' et al.' : '');
-        const urls = p.urls || [];
-        const link = urls.length
-          ? ` <a href="${urls[0]}" target="_blank" rel="noopener">[link]</a>`
-          : '';
-        li.innerHTML = `${escHtml(authors)} (${p.year || ''}). <em>${escHtml(p.title || '')}</em>. ${escHtml(p.venue || '')}.${link}`;
-        ol.appendChild(li);
+      // References — rich cards
+      const refsContainer = document.getElementById('references-list');
+      refsContainer.innerHTML = '';
+      const papers = res.papers_used || [];
+      papers.forEach((p, idx) => {
+        refsContainer.appendChild(buildReferenceCard(p, idx));
       });
+
+      // Export controls
+      const exportBox = document.getElementById('ref-export');
+      if (papers.length) {
+        document.getElementById('bibtex-link').href =
+          `/download-references?format=bibtex&result_id=${currentResultId}`;
+        document.getElementById('ris-link').href =
+          `/download-references?format=ris&result_id=${currentResultId}`;
+        exportBox.classList.remove('hidden');
+      } else {
+        exportBox.classList.add('hidden');
+      }
 
       // PDF link
       document.getElementById('pdf-link').href = `/download?result_id=${currentResultId}`;
 
       document.getElementById('results-panel').classList.remove('hidden');
       document.getElementById('results-panel').scrollIntoView({behavior: 'smooth'});
+    }
+
+    function buildReferenceCard(p, idx) {
+      const card = document.createElement('div');
+      card.className = 'ref-card';
+
+      const authors = (p.authors || []).slice(0, 4).join(', ') +
+                      ((p.authors || []).length > 4 ? ' et al.' : '');
+
+      // Build link buttons (DOI, PubMed, Full text/URLs)
+      const linkBtns = [];
+      const urls = p.urls || [];
+      const seenHosts = new Set();
+
+      if (p.doi) {
+        linkBtns.push(`<a class="link-pill doi" href="https://doi.org/${escAttr(p.doi)}" target="_blank" rel="noopener">DOI</a>`);
+      }
+      if (p.pmid) {
+        linkBtns.push(`<a class="link-pill pubmed" href="https://pubmed.ncbi.nlm.nih.gov/${escAttr(p.pmid)}/" target="_blank" rel="noopener">PubMed</a>`);
+      }
+      urls.forEach((u, i) => {
+        try {
+          const parsed = new URL(u);
+          if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return;
+          const host = parsed.host.replace(/^www\./, '');
+          if (seenHosts.has(host)) return;
+          seenHosts.add(host);
+          const label = host.length > 28 ? 'Full text' : host;
+          linkBtns.push(`<a class="link-pill fulltext" href="${escAttr(u)}" target="_blank" rel="noopener">${escHtml(label)}</a>`);
+        } catch (e) { /* skip bad URL */ }
+      });
+
+      const abstract = p.abstract || '';
+      const abstractShort = abstract.length > 320 ? abstract.slice(0, 320).trim() + '…' : abstract;
+      const hasMore = abstract.length > 320;
+
+      card.innerHTML = `
+        <div class="ref-num">${idx + 1}</div>
+        <div class="ref-body">
+          <div class="ref-title">${escHtml(p.title || 'Untitled')}</div>
+          <div class="ref-meta">
+            <span class="ref-authors">${escHtml(authors)}</span>
+            ${p.year ? `<span class="ref-year">${escHtml(String(p.year))}</span>` : ''}
+            ${p.venue ? `<span class="ref-venue">${escHtml(p.venue)}</span>` : ''}
+          </div>
+          ${abstract ? `
+            <div class="ref-abstract">
+              <span class="abs-text">${escHtml(abstractShort)}</span>
+              ${hasMore ? `<button class="abs-toggle" data-idx="${idx}">Show more</button>` : ''}
+              ${hasMore ? `<span class="abs-full hidden">${escHtml(abstract)}</span>` : ''}
+            </div>
+          ` : ''}
+          <div class="ref-actions">
+            <div class="ref-links">${linkBtns.join('') || '<span class="no-link">No external link available</span>'}</div>
+            <button class="appraise-btn" data-idx="${idx}">&#x1F50D; Appraise</button>
+          </div>
+          <div class="appraisal-panel hidden" id="appraisal-${idx}"></div>
+        </div>
+      `;
+
+      // Wire toggle for abstract
+      const toggle = card.querySelector('.abs-toggle');
+      if (toggle) {
+        toggle.addEventListener('click', () => {
+          const wrap = toggle.parentElement;
+          const shortEl = wrap.querySelector('.abs-text');
+          const fullEl = wrap.querySelector('.abs-full');
+          if (fullEl.classList.contains('hidden')) {
+            shortEl.classList.add('hidden');
+            fullEl.classList.remove('hidden');
+            toggle.textContent = 'Show less';
+          } else {
+            shortEl.classList.remove('hidden');
+            fullEl.classList.add('hidden');
+            toggle.textContent = 'Show more';
+          }
+        });
+      }
+
+      // Wire appraise button
+      card.querySelector('.appraise-btn').addEventListener('click', () => {
+        appraisePaper(idx);
+      });
+
+      return card;
+    }
+
+    async function appraisePaper(idx) {
+      const panel = document.getElementById(`appraisal-${idx}`);
+      const btn = document.querySelector(`.appraise-btn[data-idx="${idx}"]`);
+      panel.classList.remove('hidden');
+      panel.innerHTML = '<div class="appraisal-loading"><div class="spinner-ring small"></div><span>Performing critical appraisal&hellip;</span></div>';
+      btn.disabled = true;
+
+      try {
+        const resp = await fetch('/evaluate-paper', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({result_id: currentResultId, paper_index: idx}),
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error || 'Appraisal failed');
+        renderAppraisal(panel, data.appraisal);
+      } catch (e) {
+        panel.innerHTML = `<div class="error-inline">Appraisal failed: ${escHtml(e.message)}</div>`;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '\u{1F50D} Re-appraise';
+      }
+    }
+
+    function renderAppraisal(panel, a) {
+      const gradeColor = ({
+        'High': 'grade-high', 'Moderate': 'grade-mod',
+        'Low': 'grade-low', 'Very Low': 'grade-vlow'
+      })[a.grade_quality] || 'grade-mod';
+
+      const badges = [];
+      if (a.study_design) badges.push(`<span class="badge design">${escHtml(a.study_design)}</span>`);
+      if (a.oxford_cebm_level) badges.push(`<span class="badge cebm">CEBM Level ${escHtml(a.oxford_cebm_level)}</span>`);
+      if (a.grade_quality) badges.push(`<span class="badge ${gradeColor}">GRADE: ${escHtml(a.grade_quality)}</span>`);
+      if (a.jadad_score !== null && a.jadad_score !== undefined)
+        badges.push(`<span class="badge jadad">Jadad ${escHtml(String(a.jadad_score))}/5</span>`);
+      if (a.newcastle_ottawa_score !== null && a.newcastle_ottawa_score !== undefined)
+        badges.push(`<span class="badge nos">NOS ${escHtml(String(a.newcastle_ottawa_score))}/9</span>`);
+      if (a.sample_size) badges.push(`<span class="badge n">N = ${escHtml(String(a.sample_size))}</span>`);
+
+      const robRows = (a.risk_of_bias_domains || []).map(d => {
+        const judgment = d.judgment || 'Unclear';
+        const cls = ({
+          'Low': 'rob-low', 'Some concerns': 'rob-some',
+          'High': 'rob-high', 'Unclear': 'rob-unclear'
+        })[judgment] || 'rob-unclear';
+        return `<tr>
+          <td>${escHtml(d.domain || '')}</td>
+          <td><span class="rob-pill ${cls}">${escHtml(judgment)}</span></td>
+          <td>${escHtml(d.rationale || '')}</td>
+        </tr>`;
+      }).join('');
+
+      const list = (items, cls) => items && items.length
+        ? `<ul class="${cls}">${items.map(s => `<li>${escHtml(s)}</li>`).join('')}</ul>`
+        : '';
+
+      panel.innerHTML = `
+        <div class="appraisal">
+          <div class="badge-row">${badges.join('')}</div>
+
+          ${a.bottom_line ? `<div class="appraisal-bottom">${escHtml(a.bottom_line)}</div>` : ''}
+
+          ${a.key_findings ? `
+            <div class="appraisal-block">
+              <h4>Key findings</h4>
+              <p>${escHtml(a.key_findings)}</p>
+            </div>` : ''}
+
+          ${a.primary_outcome ? `
+            <div class="appraisal-block">
+              <h4>Primary outcome</h4>
+              <p>${escHtml(a.primary_outcome)}</p>
+            </div>` : ''}
+
+          ${a.grade_rationale ? `
+            <div class="appraisal-block">
+              <h4>GRADE rationale</h4>
+              <p>${escHtml(a.grade_rationale)}</p>
+            </div>` : ''}
+
+          ${robRows ? `
+            <div class="appraisal-block">
+              <h4>Risk of bias</h4>
+              <table class="rob-table">
+                <thead><tr><th>Domain</th><th>Judgment</th><th>Rationale</th></tr></thead>
+                <tbody>${robRows}</tbody>
+              </table>
+            </div>` : ''}
+
+          ${a.jadad_breakdown ? `
+            <div class="appraisal-block">
+              <h4>Jadad breakdown</h4>
+              <p>${escHtml(a.jadad_breakdown)}</p>
+            </div>` : ''}
+
+          ${a.amstar2_summary ? `
+            <div class="appraisal-block">
+              <h4>AMSTAR-2 summary</h4>
+              <p>${escHtml(a.amstar2_summary)}</p>
+            </div>` : ''}
+
+          ${a.quadas2_summary ? `
+            <div class="appraisal-block">
+              <h4>QUADAS-2 summary</h4>
+              <p>${escHtml(a.quadas2_summary)}</p>
+            </div>` : ''}
+
+          <div class="sw-grid">
+            ${a.strengths && a.strengths.length ? `
+              <div class="sw-block strengths">
+                <h4>Strengths</h4>
+                ${list(a.strengths, 'sw-list')}
+              </div>` : ''}
+            ${a.weaknesses && a.weaknesses.length ? `
+              <div class="sw-block weaknesses">
+                <h4>Weaknesses / limitations</h4>
+                ${list(a.weaknesses, 'sw-list')}
+              </div>` : ''}
+          </div>
+
+          ${a.applicability ? `
+            <div class="appraisal-block">
+              <h4>Bedside applicability</h4>
+              <p>${escHtml(a.applicability)}</p>
+            </div>` : ''}
+        </div>
+      `;
     }
 
     async function sendEmail() {
@@ -293,6 +525,7 @@
         .replace(/&/g, '&amp;').replace(/</g, '&lt;')
         .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
+    function escAttr(str) { return escHtml(str); }
 
     function formatVal(val, fmt) {
       if (fmt === 'pct') return (val * 100).toFixed(1) + '%';
