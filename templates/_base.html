@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block title %}Clinical Decision Support{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  <meta name="csrf-token" content="{{ csrf_token() }}" />
+  {% block head_extra %}{% endblock %}
+</head>
+<body>
+  <header>
+    <div class="header-inner header-flex">
+      <div>
+        <h1>&#x1F489; Clinical Decision Support</h1>
+        <p class="tagline">Evidence-based answers with probability estimates</p>
+      </div>
+      {% if current_user %}
+      <nav class="user-nav">
+        <span class="who">{{ current_user['username'] }}{% if current_user['is_admin'] %} <span class="admin-tag">admin</span>{% endif %}</span>
+        <a href="{{ url_for('settings') }}">Settings</a>
+        {% if current_user['is_admin'] %}
+        <a href="{{ url_for('admin_panel') }}">Admin</a>
+        {% endif %}
+        <a href="{{ url_for('logout') }}">Log out</a>
+      </nav>
+      {% endif %}
+    </div>
+  </header>
+
+  <main>
+    {% with msgs = get_flashed_messages(with_categories=true) %}
+      {% if msgs %}
+        <div class="flash-container">
+          {% for cat, m in msgs %}
+            <div class="flash flash-{{ cat }}">{{ m }}</div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer>
+    <p>
+      DISCLAIMER: AI-assisted decision support tool. Not a substitute for clinical judgement.
+      Always verify findings against primary literature.
+    </p>
+  </footer>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

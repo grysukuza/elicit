@@ -1,20 +1,5 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Clinical Decision Support</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
-</head>
-<body>
-  <header>
-    <div class="header-inner">
-      <h1>&#x1F489; Clinical Decision Support</h1>
-      <p class="tagline">Evidence-based answers with probability estimates &mdash; powered by Elicit &amp; Claude</p>
-    </div>
-  </header>
-
-  <main>
+{% extends "_base.html" %}
+{% block content %}
     <!-- ── Input panel ───────────────────────────────────────────── -->
     <section class="card" id="input-panel">
       <h2>Enter Clinical Question</h2>
@@ -99,7 +84,9 @@
           &#x1F4C4; Download PDF Report
         </a>
         <div class="email-group">
-          <input type="email" id="email-input" placeholder="physician@hospital.org" />
+          <input type="email" id="email-input"
+                 placeholder="physician@hospital.org"
+                 value="{{ current_user['email'] or '' }}" />
           <button class="btn-secondary" onclick="sendEmail()">&#x2709; Email Report</button>
         </div>
         <span id="email-status" class="email-status"></span>
@@ -109,17 +96,14 @@
 
     <!-- ── Error panel ───────────────────────────────────────────── -->
     <div class="error-box hidden" id="error-box"></div>
-  </main>
-
-  <footer>
-    <p>
-      DISCLAIMER: AI-assisted decision support tool. Not a substitute for clinical judgement.
-      Always verify findings against primary literature.
-    </p>
-  </footer>
-
+{% endblock %}
+{% block scripts %}
   <script>
     let currentResultId = null;
+    const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]')?.content || '';
+    function csrfHeaders(extra) {
+      return Object.assign({'X-CSRF-Token': CSRF_TOKEN}, extra || {});
+    }
 
     async function runAnalysis() {
       const text = document.getElementById('query-text').value.trim();
@@ -134,7 +118,7 @@
         setSpinner(true, 'Searching 138M+ papers via Elicit\u2026');
         const resp = await fetch('/analyze', {
           method: 'POST',
-          headers: {'Content-Type': 'application/json'},
+          headers: csrfHeaders({'Content-Type': 'application/json'}),
           body: JSON.stringify({text}),
         });
         data = await resp.json();
@@ -361,7 +345,7 @@
       try {
         const resp = await fetch('/evaluate-paper', {
           method: 'POST',
-          headers: {'Content-Type': 'application/json'},
+          headers: csrfHeaders({'Content-Type': 'application/json'}),
           body: JSON.stringify({result_id: currentResultId, paper_index: idx}),
         });
         const data = await resp.json();
@@ -490,7 +474,7 @@
       try {
         const resp = await fetch('/send-email', {
           method: 'POST',
-          headers: {'Content-Type': 'application/json'},
+          headers: csrfHeaders({'Content-Type': 'application/json'}),
           body: JSON.stringify({email, result_id: currentResultId}),
         });
         const data = await resp.json();
@@ -535,5 +519,4 @@
       return val;
     }
   </script>
-</body>
-</html>
+{% endblock %}

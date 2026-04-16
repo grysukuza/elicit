@@ -1,0 +1,70 @@
+{% extends "_base.html" %}
+{% block title %}Settings — Clinical Decision Support{% endblock %}
+
+{% block content %}
+<section class="card">
+  <h2>Account settings</h2>
+
+  <form method="POST" action="{{ url_for('settings') }}" class="settings-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+    <div class="form-row">
+      <label class="auth-label">Username</label>
+      <input type="text" value="{{ user['username'] }}" disabled />
+    </div>
+
+    <div class="form-row">
+      <label class="auth-label" for="email">
+        Email address
+        <span class="hint-inline">(reports can be auto-sent here)</span>
+      </label>
+      <input type="email" id="email" name="email"
+             value="{{ user['email'] or '' }}"
+             placeholder="physician@hospital.org" />
+    </div>
+
+    <label class="checkbox-row">
+      <input type="checkbox" name="auto_email_results"
+             {% if user['auto_email_results'] %}checked{% endif %} />
+      <span>Automatically email me a copy of every analysis result</span>
+    </label>
+    {% if not smtp_configured %}
+      <p class="hint warn">
+        Note: SMTP is not configured on this server, so emails will not actually be
+        sent until an admin sets <code>SMTP_HOST</code>, <code>SMTP_USER</code>,
+        and <code>SMTP_PASS</code>.
+      </p>
+    {% endif %}
+
+    <button type="submit" class="btn-primary">Save settings</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Change password</h2>
+  <form method="POST" action="{{ url_for('change_password') }}" class="settings-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+    <div class="form-row">
+      <label class="auth-label" for="current_password">Current password</label>
+      <input type="password" id="current_password" name="current_password" required />
+    </div>
+    <div class="form-row">
+      <label class="auth-label" for="new_password">New password (min. 8 characters)</label>
+      <input type="password" id="new_password" name="new_password" required minlength="8" />
+    </div>
+    <div class="form-row">
+      <label class="auth-label" for="new_password2">Confirm new password</label>
+      <input type="password" id="new_password2" name="new_password2" required minlength="8" />
+    </div>
+    <button type="submit" class="btn-primary">Change password</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Account info</h2>
+  <dl class="info-grid">
+    <dt>Account created</dt><dd>{{ user['created_at'] or '—' }}</dd>
+    <dt>Last login</dt><dd>{{ user['last_login_at'] or '—' }}</dd>
+    <dt>Role</dt><dd>{% if user['is_admin'] %}Administrator{% else %}Standard user{% endif %}</dd>
+  </dl>
+</section>
+{% endblock %}

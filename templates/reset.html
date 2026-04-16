@@ -1,0 +1,18 @@
+{% extends "_base.html" %}
+{% block title %}Reset password — Clinical Decision Support{% endblock %}
+
+{% block content %}
+<section class="card auth-card">
+  <h2>Set a new password</h2>
+  <form method="POST" action="{{ url_for('reset', token=token) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+    <label class="auth-label" for="password">New password (min. 8 characters)</label>
+    <input type="password" id="password" name="password" required minlength="8" autofocus />
+
+    <label class="auth-label" for="password2">Confirm new password</label>
+    <input type="password" id="password2" name="password2" required minlength="8" />
+
+    <button type="submit" class="btn-primary full">Update password</button>
+  </form>
+</section>
+{% endblock %}

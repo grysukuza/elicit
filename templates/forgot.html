@@ -1,0 +1,21 @@
+{% extends "_base.html" %}
+{% block title %}Forgot password — Clinical Decision Support{% endblock %}
+
+{% block content %}
+<section class="card auth-card">
+  <h2>Forgot password</h2>
+  <p class="hint">
+    Enter your username or the email associated with your account. We will issue a
+    reset link valid for 24 hours.
+  </p>
+  <form method="POST" action="{{ url_for('forgot') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+    <label class="auth-label" for="identifier">Username or email</label>
+    <input type="text" id="identifier" name="identifier" required autofocus />
+    <button type="submit" class="btn-primary full">Request reset link</button>
+  </form>
+  <div class="auth-links">
+    <a href="{{ url_for('login') }}">Back to sign in</a>
+  </div>
+</section>
+{% endblock %}
