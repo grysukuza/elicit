@@ -662,6 +662,354 @@ def admin_delete_user(user_id):
     return redirect(url_for("admin_panel"))
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# REST API (key-authenticated)
+# ─────────────────────────────────────────────────────────────────────────────
+
+API_VERSION = "1"
+
+
+def _extract_api_key() -> str:
+    """Extract an API key from Authorization: Bearer ... or X-API-Key header."""
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        return auth_header[7:].strip()
+    return (request.headers.get("X-API-Key") or "").strip()
+
+
+def api_key_required(view):
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        key = _extract_api_key()
+        user = auth.get_user_by_api_key(key) if key else None
+        if not user:
+            return jsonify({
+                "error": "Invalid or missing API key.",
+                "hint": "Send 'Authorization: Bearer <key>' or 'X-API-Key: <key>'.",
+            }), 401
+        g.api_user = user
+        return view(*args, **kwargs)
+    return wrapped
+
+
+def cron_secret_required(view):
+    """Routes called by an external cron need a shared secret in X-Cron-Secret."""
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        configured = os.environ.get("CRON_SECRET", "")
+        if not configured:
+            return jsonify({"error": "CRON_SECRET is not configured on this server."}), 503
+        provided = request.headers.get("X-Cron-Secret", "")
+        if not provided or not _secrets.compare_digest(provided, configured):
+            return jsonify({"error": "Invalid cron secret."}), 401
+        return view(*args, **kwargs)
+    return wrapped
+
+
+@app.route("/api/v1/health", methods=["GET"])
+def api_health():
+    """Public ping endpoint — no auth required."""
+    return jsonify({
+        "status": "ok",
+        "service": "clinical-decision-support",
+        "version": API_VERSION,
+        "time": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "smtp_configured": bool(_smtp_settings()["host"]),
+        "imap_configured": email_inbox.imap_configured(),
+    })
+
+
+@app.route("/api/v1/me", methods=["GET"])
+@api_key_required
+def api_me():
+    u = g.api_user
+    return jsonify({
+        "id": u["id"],
+        "username": u["username"],
+        "email": u["email"],
+        "is_admin": bool(u["is_admin"]),
+        "auto_email_results": bool(u["auto_email_results"]),
+        "daily_digest": bool(u["daily_digest"]),
+    })
+
+
+@app.route("/api/v1/analyze", methods=["POST"])
+@api_key_required
+def api_analyze():
+    data = request.get_json(silent=True) or {}
+    question = (data.get("question") or data.get("text") or "").strip()
+    if not question:
+        return jsonify({"error": "Field 'question' is required."}), 400
+
+    try:
+        max_papers = int(data.get("max_papers", 20))
+    except (TypeError, ValueError):
+        max_papers = 20
+    max_papers = max(1, min(max_papers, 50))
+
+    try:
+        output = run_pipeline(question, max_papers=max_papers)
+    except Exception as exc:
+        app.logger.exception("API analyze pipeline error")
+        return jsonify({"error": str(exc)}), 500
+
+    user = g.api_user
+    try:
+        auth.record_query(
+            user["id"],
+            question,
+            output.get("result", {}).get("clinical_bottom_line", ""),
+            source="api",
+        )
+    except Exception:
+        app.logger.exception("Failed to record API query history")
+
+    # Optional: email the result if requested or if user opted in
+    if (data.get("email") or user["auto_email_results"]) and user["email"]:
+        try:
+            _send_result_email(user["email"], output["result"])
+            output["emailed_to"] = user["email"]
+        except Exception as exc:
+            app.logger.warning("API auto-email failed: %s", exc)
+            output["email_error"] = str(exc)
+
+    return jsonify(output)
+
+
+@app.route("/api/v1/digest/run", methods=["POST"])
+@cron_secret_required
+def api_digest_run():
+    """External-cron-triggered daily digest dispatch."""
+    sent, skipped = run_daily_digest(force=False)
+    return jsonify({"sent": sent, "skipped": skipped})
+
+
+@app.route("/api/v1/inbox/poll", methods=["POST"])
+@cron_secret_required
+def api_inbox_poll():
+    """External-cron-triggered IMAP poll (alternative to the internal scheduler)."""
+    n = poll_inbox_now()
+    return jsonify({"processed": n})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Daily digest
+# ─────────────────────────────────────────────────────────────────────────────
+
+DIGEST_INTERVAL_HOURS = 24
+
+
+def _digest_body(user: dict, since_iso: str) -> str:
+    rows = auth.queries_since(user["id"], since_iso)
+    lines = [
+        f"Hello {user['username']},",
+        "",
+        "Here is your daily Clinical Decision Support digest.",
+        "",
+        f"Service status: API healthy (v{API_VERSION}).",
+        "",
+    ]
+    if rows:
+        lines.append(f"Your activity in the last 24 hours ({len(rows)} question{'s' if len(rows) != 1 else ''}):")
+        lines.append("")
+        for r in rows:
+            q = (r["question"] or "").replace("\n", " ").strip()
+            if len(q) > 140:
+                q = q[:137] + "…"
+            bl = (r["bottom_line"] or "").replace("\n", " ").strip()
+            if len(bl) > 220:
+                bl = bl[:217] + "…"
+            lines.append(f"• [{r['source']}] {q}")
+            if bl:
+                lines.append(f"    → {bl}")
+            lines.append("")
+    else:
+        lines.append("No questions analyzed in the last 24 hours.")
+        lines.append("")
+        lines.append("Tip: you can email a question to the configured inbox or POST")
+        lines.append("to /api/v1/analyze with your API key for an instant analysis.")
+        lines.append("")
+
+    lines += [
+        "─" * 60,
+        "You're receiving this because daily digest is enabled in your settings.",
+        "Disable it any time at /settings.",
+    ]
+    return "\n".join(lines)
+
+
+def run_daily_digest(force: bool = False) -> tuple[int, int]:
+    """Send digest to every opted-in user whose 24h window has elapsed."""
+    if not _smtp_settings()["host"]:
+        app.logger.info("Skipping digest: SMTP not configured")
+        return (0, 0)
+
+    sent = 0
+    skipped = 0
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=DIGEST_INTERVAL_HOURS)
+    since_iso = cutoff.isoformat(timespec="seconds")
+
+    for user in auth.get_users_with_digest():
+        last = user["last_digest_at"]
+        if not force and last:
+            try:
+                last_dt = datetime.fromisoformat(last)
+                if last_dt > cutoff:
+                    skipped += 1
+                    continue
+            except ValueError:
+                pass
+        try:
+            body = _digest_body(dict(user), since_iso)
+            _send_smtp(
+                recipient=user["email"],
+                subject="Daily Digest — Clinical Decision Support",
+                body_text=body,
+            )
+            auth.mark_digest_sent(user["id"])
+            sent += 1
+        except Exception:
+            app.logger.exception("Failed to send digest to user %s", user["id"])
+
+    if sent or skipped:
+        app.logger.info("Daily digest run: sent=%d skipped=%d", sent, skipped)
+    return (sent, skipped)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Email-to-answer (IMAP inbound handler)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _user_lookup_by_email(addr: str):
+    user = auth.get_user_by_email(addr)
+    return dict(user) if user else None
+
+
+def _handle_inbound_question(user: dict, subject: str, body: str) -> None:
+    """Run the pipeline for an inbound email and reply with the analysis."""
+    question = (body or subject or "").strip()
+    if not question:
+        try:
+            _send_smtp(
+                recipient=user["email"],
+                subject="Re: " + (subject or "Your clinical question"),
+                body_text=(
+                    f"Hello {user['username']},\n\n"
+                    "We received your email but couldn't find a clinical question "
+                    "in the body. Please reply with your question in plain text.\n\n"
+                    "— Clinical Decision Support"
+                ),
+            )
+        except Exception:
+            app.logger.exception("Failed to send empty-body reply")
+        return
+
+    try:
+        output = run_pipeline(question)
+    except Exception:
+        app.logger.exception("Pipeline failed for inbound email from %s", user["email"])
+        try:
+            _send_smtp(
+                recipient=user["email"],
+                subject="Re: " + (subject or "Your clinical question"),
+                body_text=(
+                    "We were unable to analyze your question due to a server "
+                    "error. Please try again later or use the web interface.\n\n"
+                    "— Clinical Decision Support"
+                ),
+            )
+        except Exception:
+            app.logger.exception("Failed to send error reply")
+        return
+
+    try:
+        auth.record_query(
+            user["id"],
+            question,
+            output.get("result", {}).get("clinical_bottom_line", ""),
+            source="email",
+        )
+    except Exception:
+        app.logger.exception("Failed to record email query history")
+
+    try:
+        result = output["result"]
+        body_text = (
+            f"Hello {user['username']},\n\n"
+            f"Below is the analysis for your question:\n\n"
+            f"\"{question[:500]}{'…' if len(question) > 500 else ''}\"\n\n"
+            "─" * 60 + "\n\n"
+            + _result_to_plain_text(result)
+        )
+        pdf_bytes = generate_pdf(result)
+        _send_smtp(
+            recipient=user["email"],
+            subject="Re: " + (subject or "Your clinical question"),
+            body_text=body_text,
+            attachment=("clinical_report.pdf", pdf_bytes, "application/pdf"),
+        )
+    except Exception:
+        app.logger.exception("Failed to send analysis reply")
+
+
+def _handle_unknown_sender(sender: str, subject: str, body: str) -> None:
+    """Polite bounce-back for emails from non-registered addresses."""
+    if not sender:
+        return
+    try:
+        _send_smtp(
+            recipient=sender,
+            subject="Re: " + (subject or "Clinical Decision Support"),
+            body_text=(
+                "Hello,\n\n"
+                "Thanks for writing in. To use the email-question service you "
+                "must first register an account using this email address at:\n"
+                f"  {request and request.url_root or ''}register\n\n"
+                "Once registered, just reply to this address with your clinical "
+                "question and you'll get an analysis back.\n\n"
+                "— Clinical Decision Support"
+            ),
+        )
+    except Exception:
+        app.logger.exception("Failed to send unknown-sender bounce")
+
+
+def poll_inbox_now() -> int:
+    """Run one IMAP poll cycle. Safe to call from anywhere."""
+    if not email_inbox.imap_configured() or not _smtp_settings()["host"]:
+        return 0
+    return email_inbox.poll_inbox(
+        user_lookup=_user_lookup_by_email,
+        on_question=_handle_inbound_question,
+        on_unknown=_handle_unknown_sender,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Scheduler startup
+# ─────────────────────────────────────────────────────────────────────────────
+
+_scheduler: BackgroundScheduler | None = None
+
+
+def _start_scheduler_once() -> None:
+    global _scheduler
+    if _scheduler is not None:
+        return
+    if not should_start_scheduler():
+        return
+    _scheduler = BackgroundScheduler(
+        poll_inbox_fn=poll_inbox_now if email_inbox.imap_configured() else None,
+        run_digest_fn=lambda: run_daily_digest(force=False)[0],
+        imap_poll_seconds=int(os.environ.get("IMAP_POLL_SECONDS", "60")),
+        digest_check_seconds=300,  # check every 5 minutes
+    )
+    _scheduler.start()
+
+
+_start_scheduler_once()
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     debug = os.environ.get("FLASK_DEBUG", "1") not in ("0", "false", "False", "")

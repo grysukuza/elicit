@@ -691,6 +691,47 @@ footer {
   background: #f8fbfe;
 }
 
+/* ── API key + docs ───────────────────────────────────────────── */
+.api-key-box {
+  background: #f4f9ff;
+  border: 1.5px solid #9bc7f0;
+  border-radius: 6px;
+  padding: 12px 14px;
+  margin: 8px 0 14px;
+}
+.api-key-box.new {
+  background: #fef9e7;
+  border-color: #f0d264;
+}
+.api-key-box strong { display: block; margin-bottom: 6px; font-size: 0.88rem; }
+.api-key-box .reset-url { background: #fff; }
+.api-key-actions { display: flex; gap: 12px; align-items: center; margin: 8px 0 14px; flex-wrap: wrap; }
+.api-docs {
+  margin-top: 14px;
+  border: 1px solid #dde4ec;
+  border-radius: 6px;
+  padding: 8px 12px;
+  background: #fafcfe;
+}
+.api-docs summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: #1a3a5c;
+  font-size: 0.88rem;
+  padding: 4px 0;
+}
+.code-block {
+  background: #1a1a2e;
+  color: #e0e8f0;
+  padding: 12px 14px;
+  border-radius: 6px;
+  font-family: ui-monospace, "SFMono-Regular", monospace;
+  font-size: 0.78rem;
+  overflow-x: auto;
+  white-space: pre;
+  margin-top: 10px;
+}
+
 /* ── Utility ─────────────────────────────────────────────────── */
 .hidden { display: none !important; }
 

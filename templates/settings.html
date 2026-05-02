@@ -27,6 +27,13 @@
              {% if user['auto_email_results'] %}checked{% endif %} />
       <span>Automatically email me a copy of every analysis result</span>
     </label>
+
+    <label class="checkbox-row">
+      <input type="checkbox" name="daily_digest"
+             {% if user['daily_digest'] %}checked{% endif %} />
+      <span>Send me a daily digest summarising my activity</span>
+    </label>
+
     {% if not smtp_configured %}
       <p class="hint warn">
         Note: SMTP is not configured on this server, so emails will not actually be
@@ -37,6 +44,81 @@
 
     <button type="submit" class="btn-primary">Save settings</button>
   </form>
+</section>
+
+<section class="card">
+  <h2>API access</h2>
+  <p class="hint">
+    Use your API key to query this service programmatically. Send it as
+    <code>Authorization: Bearer &lt;key&gt;</code> or <code>X-API-Key: &lt;key&gt;</code>.
+  </p>
+
+  {% set just_issued = session.pop('_just_issued_api_key', None) %}
+  {% if just_issued %}
+    <div class="api-key-box new">
+      <strong>Your new API key (copy it now — it won't be shown again):</strong>
+      <input type="text" class="reset-url" readonly value="{{ just_issued }}"
+             onclick="this.select();" />
+    </div>
+  {% elif user['api_key'] %}
+    <p class="hint">An API key is currently active for your account
+      (ends in <code>…{{ user['api_key'][-6:] }}</code>). Regenerate to get a new one.</p>
+  {% else %}
+    <p class="hint">No API key issued yet.</p>
+  {% endif %}
+
+  <div class="api-key-actions">
+    <form method="POST" action="{{ url_for('regenerate_api_key') }}" class="inline-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+      <button class="btn-primary" type="submit">
+        {% if user['api_key'] %}Regenerate API key{% else %}Generate API key{% endif %}
+      </button>
+    </form>
+    {% if user['api_key'] %}
+    <form method="POST" action="{{ url_for('revoke_api_key') }}" class="inline-form"
+          onsubmit="return confirm('Revoke your API key? Existing integrations will stop working.');">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+      <button class="btn-mini danger" type="submit">Revoke</button>
+    </form>
+    {% endif %}
+  </div>
+
+  <details class="api-docs">
+    <summary>API examples</summary>
+    <pre class="code-block"># Health check (no auth required)
+curl {{ api_base_url }}/api/v1/health
+
+# Run an analysis
+curl -X POST {{ api_base_url }}/api/v1/analyze \
+     -H "Authorization: Bearer YOUR_API_KEY" \
+     -H "Content-Type: application/json" \
+     -d '{"question": "65yo with afib, DOAC vs warfarin?"}'
+
+# Get account info
+curl {{ api_base_url }}/api/v1/me \
+     -H "Authorization: Bearer YOUR_API_KEY"</pre>
+  </details>
+</section>
+
+<section class="card">
+  <h2>Email-to-answer</h2>
+  {% if imap_configured %}
+    <p class="hint">
+      Send a clinical question by email to
+      <strong>{{ inbox_address }}</strong> from your registered address
+      (<strong>{{ user['email'] or '— please set your email above —' }}</strong>)
+      and you'll receive an automated analysis as a reply.
+    </p>
+    {% if not user['email'] %}
+      <p class="hint warn">Set your email above first so we can match inbound messages to your account.</p>
+    {% endif %}
+  {% else %}
+    <p class="hint warn">
+      Email-to-answer is not active because IMAP is not configured. An admin must
+      set <code>IMAP_HOST</code>, <code>IMAP_USER</code>, and <code>IMAP_PASS</code>
+      to enable it.
+    </p>
+  {% endif %}
 </section>
 
 <section class="card">
