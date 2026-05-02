@@ -30,6 +30,7 @@ import io
 import os
 import secrets as _secrets
 import smtplib
+import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
@@ -93,8 +94,15 @@ def _enforce_csrf():
     """CSRF protection for all state-changing requests."""
     if request.method in ("GET", "HEAD", "OPTIONS"):
         return None
-    # /api/ uses bearer-token auth (or shared cron secret) — exempt from CSRF
-    if request.path.startswith("/api/"):
+    # /api/ routes authenticate via bearer key or X-Cron-Secret header — these
+    # are not sent automatically by browsers, so they're CSRF-immune. We only
+    # exempt the request from CSRF when one of those auth headers is present;
+    # otherwise (e.g. a future cookie-authed /api/ route) CSRF still applies.
+    if request.path.startswith("/api/") and (
+        request.headers.get("Authorization", "").lower().startswith("bearer ")
+        or request.headers.get("X-API-Key")
+        or request.headers.get("X-Cron-Secret")
+    ):
         return None
     # Allow GET-equivalent endpoints; everything else must present a CSRF token
     expected = session.get("_csrf_token")
@@ -798,6 +806,15 @@ def api_inbox_poll():
 
 DIGEST_INTERVAL_HOURS = 24
 
+# Single-flight locks: prevent overlapping scheduler + cron-endpoint runs
+# from doing duplicate work in the same process.
+_digest_lock = threading.Lock()
+_inbox_lock = threading.Lock()
+
+# Public base URL used for outbound emails sent from background threads
+# (where Flask's `request` object is not available).
+PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
+
 
 def _digest_body(user: dict, since_iso: str) -> str:
     rows = auth.queries_since(user["id"], since_iso)
@@ -839,41 +856,56 @@ def _digest_body(user: dict, since_iso: str) -> str:
 
 
 def run_daily_digest(force: bool = False) -> tuple[int, int]:
-    """Send digest to every opted-in user whose 24h window has elapsed."""
+    """Send digest to every opted-in user whose 24h window has elapsed.
+
+    Race-safe: each user's slot is claimed via an atomic conditional UPDATE
+    (`auth.claim_digest_slot`) so concurrent scheduler + cron-endpoint runs
+    cannot send duplicate digests. A process-level lock additionally
+    serialises in-process callers.
+    """
     if not _smtp_settings()["host"]:
         app.logger.info("Skipping digest: SMTP not configured")
         return (0, 0)
 
-    sent = 0
-    skipped = 0
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=DIGEST_INTERVAL_HOURS)
-    since_iso = cutoff.isoformat(timespec="seconds")
+    if not _digest_lock.acquire(blocking=False):
+        app.logger.info("Skipping digest: another digest run is already in progress")
+        return (0, 0)
 
-    for user in auth.get_users_with_digest():
-        last = user["last_digest_at"]
-        if not force and last:
+    try:
+        sent = 0
+        skipped = 0
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=DIGEST_INTERVAL_HOURS)
+        since_iso = cutoff.isoformat(timespec="seconds")
+
+        for user in auth.get_users_with_digest():
+            previous_last = user["last_digest_at"]
+            if force:
+                # When forced, send unconditionally and just timestamp it
+                claimed = True
+                auth.mark_digest_sent(user["id"])
+            else:
+                claimed = auth.claim_digest_slot(user["id"], since_iso)
+            if not claimed:
+                skipped += 1
+                continue
             try:
-                last_dt = datetime.fromisoformat(last)
-                if last_dt > cutoff:
-                    skipped += 1
-                    continue
-            except ValueError:
-                pass
-        try:
-            body = _digest_body(dict(user), since_iso)
-            _send_smtp(
-                recipient=user["email"],
-                subject="Daily Digest — Clinical Decision Support",
-                body_text=body,
-            )
-            auth.mark_digest_sent(user["id"])
-            sent += 1
-        except Exception:
-            app.logger.exception("Failed to send digest to user %s", user["id"])
+                body = _digest_body(dict(user), since_iso)
+                _send_smtp(
+                    recipient=user["email"],
+                    subject="Daily Digest — Clinical Decision Support",
+                    body_text=body,
+                )
+                sent += 1
+            except Exception:
+                app.logger.exception("Failed to send digest to user %s", user["id"])
+                # Roll back the claim so the next run can retry this user
+                auth.release_digest_slot(user["id"], previous_last)
 
-    if sent or skipped:
-        app.logger.info("Daily digest run: sent=%d skipped=%d", sent, skipped)
-    return (sent, skipped)
+        if sent or skipped:
+            app.logger.info("Daily digest run: sent=%d skipped=%d", sent, skipped)
+        return (sent, skipped)
+    finally:
+        _digest_lock.release()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -953,9 +985,15 @@ def _handle_inbound_question(user: dict, subject: str, body: str) -> None:
 
 
 def _handle_unknown_sender(sender: str, subject: str, body: str) -> None:
-    """Polite bounce-back for emails from non-registered addresses."""
+    """Polite bounce-back for emails from non-registered addresses.
+
+    This callback may run inside a background thread (no Flask request
+    context), so we use the configured PUBLIC_BASE_URL env var for the link.
+    """
     if not sender:
         return
+    base = PUBLIC_BASE_URL or "your Clinical Decision Support server"
+    register_link = f"{base}/register" if PUBLIC_BASE_URL else f"{base} (visit /register)"
     try:
         _send_smtp(
             recipient=sender,
@@ -964,7 +1002,7 @@ def _handle_unknown_sender(sender: str, subject: str, body: str) -> None:
                 "Hello,\n\n"
                 "Thanks for writing in. To use the email-question service you "
                 "must first register an account using this email address at:\n"
-                f"  {request and request.url_root or ''}register\n\n"
+                f"  {register_link}\n\n"
                 "Once registered, just reply to this address with your clinical "
                 "question and you'll get an analysis back.\n\n"
                 "— Clinical Decision Support"
@@ -974,15 +1012,29 @@ def _handle_unknown_sender(sender: str, subject: str, body: str) -> None:
         app.logger.exception("Failed to send unknown-sender bounce")
 
 
-def poll_inbox_now() -> int:
-    """Run one IMAP poll cycle. Safe to call from anywhere."""
+def poll_inbox_now(max_messages: int | None = None) -> int:
+    """Run one IMAP poll cycle. Safe to call from anywhere.
+
+    A process-level lock prevents the background scheduler and the
+    `/api/v1/inbox/poll` endpoint from polling at the same time, which would
+    risk fetching the same UNSEEN messages twice before flags are updated.
+    """
     if not email_inbox.imap_configured() or not _smtp_settings()["host"]:
         return 0
-    return email_inbox.poll_inbox(
-        user_lookup=_user_lookup_by_email,
-        on_question=_handle_inbound_question,
-        on_unknown=_handle_unknown_sender,
-    )
+    if max_messages is None:
+        max_messages = int(os.environ.get("IMAP_MAX_PER_POLL", "10"))
+    if not _inbox_lock.acquire(blocking=False):
+        app.logger.info("Skipping inbox poll: another poll is already in progress")
+        return 0
+    try:
+        return email_inbox.poll_inbox(
+            user_lookup=_user_lookup_by_email,
+            on_question=_handle_inbound_question,
+            on_unknown=_handle_unknown_sender,
+            max_messages=max_messages,
+        )
+    finally:
+        _inbox_lock.release()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
