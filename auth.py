@@ -12,6 +12,7 @@ Provides:
 
 from __future__ import annotations
 
+import hashlib
 import os
 import sqlite3
 import secrets
@@ -209,20 +210,31 @@ def update_user(
 API_KEY_PREFIX = "cds_"
 
 
+def _hash_api_key(key: str) -> str:
+    """Hash an API key for at-rest storage. Keys are high-entropy so a fast hash
+    (sha256 + per-server pepper) is sufficient — no salting required since each
+    raw key is already unique."""
+    pepper = os.environ.get("API_KEY_PEPPER", "")
+    return hashlib.sha256((pepper + key).encode("utf-8")).hexdigest()
+
+
 def regenerate_api_key(user_id: int) -> str:
-    """Issue a fresh API key for the user, replacing any existing one."""
-    new_key = API_KEY_PREFIX + secrets.token_urlsafe(32)
+    """Issue a fresh API key for the user. Only the hash is persisted; the raw
+    key value is returned exactly once and cannot be recovered later."""
+    raw_key = API_KEY_PREFIX + secrets.token_urlsafe(32)
+    digest = _hash_api_key(raw_key)
     with _connect() as conn:
-        conn.execute("UPDATE users SET api_key = ? WHERE id = ?", (new_key, user_id))
-    return new_key
+        conn.execute("UPDATE users SET api_key = ? WHERE id = ?", (digest, user_id))
+    return raw_key
 
 
 def get_user_by_api_key(key: str) -> Optional[sqlite3.Row]:
     if not key:
         return None
+    digest = _hash_api_key(key)
     with _connect() as conn:
         return conn.execute(
-            "SELECT * FROM users WHERE api_key = ?", (key,)
+            "SELECT * FROM users WHERE api_key = ?", (digest,)
         ).fetchone()
 
 
@@ -247,6 +259,39 @@ def mark_digest_sent(user_id: int) -> None:
     with _connect() as conn:
         conn.execute(
             "UPDATE users SET last_digest_at = ? WHERE id = ?", (_now(), user_id)
+        )
+
+
+def claim_digest_slot(user_id: int, cutoff_iso: str) -> bool:
+    """Atomically claim a digest send slot.
+
+    Returns True if this caller "won" — i.e. the user's last_digest_at was
+    either NULL or older than `cutoff_iso`, and we updated it to now. Returns
+    False if another concurrent caller already claimed the slot. This makes
+    digest dispatch single-flight even across overlapping
+    scheduler / cron-endpoint invocations.
+    """
+    with _connect() as conn:
+        cur = conn.execute(
+            """
+            UPDATE users
+               SET last_digest_at = ?
+             WHERE id = ?
+               AND daily_digest = 1
+               AND email IS NOT NULL AND email != ''
+               AND (last_digest_at IS NULL OR last_digest_at < ?)
+            """,
+            (_now(), user_id, cutoff_iso),
+        )
+        return cur.rowcount > 0
+
+
+def release_digest_slot(user_id: int, previous: Optional[str]) -> None:
+    """Roll back a claim if sending failed, so the next run will retry."""
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE users SET last_digest_at = ? WHERE id = ?",
+            (previous, user_id),
         )
 
 

@@ -101,10 +101,14 @@ def _extract_text(msg: Message) -> str:
     return text.strip()
 
 
+DEFAULT_MAX_PER_POLL = 10
+
+
 def poll_inbox(
     user_lookup: Callable[[str], Optional[dict]],
     on_question: Callable[[dict, str, str], None],
     on_unknown: Optional[Callable[[str, str, str], None]] = None,
+    max_messages: int = DEFAULT_MAX_PER_POLL,
 ) -> int:
     """
     Poll the configured IMAP inbox for UNSEEN messages and dispatch each.
@@ -116,6 +120,8 @@ def poll_inbox(
             This callback is responsible for sending the reply.
         on_unknown: function(sender_email, subject, body) -> None.
             Called for messages from unknown senders. Optional.
+        max_messages: cap the number of messages processed per call to bound
+            CPU/LLM cost. Remaining messages stay UNSEEN for the next poll.
 
     Returns:
         Number of messages processed.
@@ -134,6 +140,8 @@ def poll_inbox(
                 logger.warning("IMAP search failed: %s", typ)
                 return 0
             ids = (data[0] or b"").split()
+            if max_messages > 0:
+                ids = ids[:max_messages]
             for msg_id in ids:
                 try:
                     typ, msg_data = imap.fetch(msg_id, "(RFC822)")
