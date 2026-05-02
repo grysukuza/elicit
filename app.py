@@ -28,13 +28,15 @@ Routes:
 
 import io
 import os
+import secrets as _secrets
 import smtplib
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
 from email import encoders
+from functools import wraps
 
 from flask import (
     Flask,
@@ -47,6 +49,7 @@ from flask import (
     url_for,
     flash,
     abort,
+    g,
 )
 from dotenv import load_dotenv
 
@@ -54,6 +57,8 @@ from pipeline import run_pipeline
 from pdf_generator import generate_pdf
 from paper_evaluator import evaluate_paper, papers_to_bibtex, papers_to_ris
 import auth
+import email_inbox
+from scheduler import BackgroundScheduler, should_start_scheduler
 
 load_dotenv()
 
@@ -87,6 +92,9 @@ def inject_user():
 def _enforce_csrf():
     """CSRF protection for all state-changing requests."""
     if request.method in ("GET", "HEAD", "OPTIONS"):
+        return None
+    # /api/ uses bearer-token auth (or shared cron secret) — exempt from CSRF
+    if request.path.startswith("/api/"):
         return None
     # Allow GET-equivalent endpoints; everything else must present a CSRF token
     expected = session.get("_csrf_token")
@@ -158,6 +166,17 @@ def analyze():
         "appraisals": {},
     }
     session["result_id"] = result_id
+
+    # Record in query history (used by daily digest)
+    try:
+        auth.record_query(
+            user["id"],
+            free_text,
+            output.get("result", {}).get("clinical_bottom_line", ""),
+            source="web",
+        )
+    except Exception:
+        app.logger.exception("Failed to record query history")
 
     auto_emailed_to = None
     if user["auto_email_results"] and user["email"]:
@@ -526,11 +545,47 @@ def settings():
     if request.method == "POST":
         email = (request.form.get("email") or "").strip()
         auto_email = bool(request.form.get("auto_email_results"))
-        auth.update_user(user["id"], email=email, auto_email_results=auto_email)
+        daily_digest = bool(request.form.get("daily_digest"))
+        auth.update_user(
+            user["id"],
+            email=email,
+            auto_email_results=auto_email,
+            daily_digest=daily_digest,
+        )
         flash("Settings saved.", "info")
         return redirect(url_for("settings"))
 
-    return render_template("settings.html", user=user, smtp_configured=bool(_smtp_settings()["host"]))
+    return render_template(
+        "settings.html",
+        user=user,
+        smtp_configured=bool(_smtp_settings()["host"]),
+        imap_configured=email_inbox.imap_configured(),
+        api_base_url=request.url_root.rstrip("/"),
+        inbox_address=os.environ.get("IMAP_USER", ""),
+    )
+
+
+@app.route("/settings/api-key", methods=["POST"])
+@auth.login_required
+def regenerate_api_key():
+    user = auth.current_user()
+    new_key = auth.regenerate_api_key(user["id"])
+    flash(
+        "A new API key has been generated. Copy it now — it won't be shown again "
+        "unless you regenerate.",
+        "info",
+    )
+    session["_just_issued_api_key"] = new_key
+    return redirect(url_for("settings"))
+
+
+@app.route("/settings/api-key/revoke", methods=["POST"])
+@auth.login_required
+def revoke_api_key():
+    user = auth.current_user()
+    auth.revoke_api_key(user["id"])
+    flash("API key revoked.", "info")
+    return redirect(url_for("settings"))
 
 
 @app.route("/settings/password", methods=["POST"])

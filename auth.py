@@ -42,7 +42,7 @@ def _connect() -> sqlite3.Connection:
 
 
 def init_db() -> None:
-    """Create tables if they don't exist."""
+    """Create tables if they don't exist, and run lightweight migrations."""
     with _connect() as conn:
         conn.executescript(
             """
@@ -64,7 +64,30 @@ def init_db() -> None:
                 created_at TEXT NOT NULL,
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             );
+            CREATE TABLE IF NOT EXISTS query_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                question TEXT NOT NULL,
+                bottom_line TEXT,
+                created_at TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT 'web',
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
             """
+        )
+        # ── Lightweight migrations: add columns if they don't exist ───────────
+        # SQLite cannot add a UNIQUE column via ALTER TABLE — uniqueness is
+        # enforced via a separate partial index instead.
+        existing_cols = {row["name"] for row in conn.execute("PRAGMA table_info(users)")}
+        if "api_key" not in existing_cols:
+            conn.execute("ALTER TABLE users ADD COLUMN api_key TEXT")
+        if "daily_digest" not in existing_cols:
+            conn.execute("ALTER TABLE users ADD COLUMN daily_digest INTEGER NOT NULL DEFAULT 0")
+        if "last_digest_at" not in existing_cols:
+            conn.execute("ALTER TABLE users ADD COLUMN last_digest_at TEXT")
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_api_key "
+            "ON users(api_key) WHERE api_key IS NOT NULL"
         )
 
 
@@ -159,6 +182,7 @@ def update_user(
     user_id: int,
     email: Optional[str] = None,
     auto_email_results: Optional[bool] = None,
+    daily_digest: Optional[bool] = None,
 ) -> None:
     fields = []
     values: list = []
@@ -168,11 +192,89 @@ def update_user(
     if auto_email_results is not None:
         fields.append("auto_email_results = ?")
         values.append(1 if auto_email_results else 0)
+    if daily_digest is not None:
+        fields.append("daily_digest = ?")
+        values.append(1 if daily_digest else 0)
     if not fields:
         return
     values.append(user_id)
     with _connect() as conn:
         conn.execute(f"UPDATE users SET {', '.join(fields)} WHERE id = ?", values)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# API keys
+# ─────────────────────────────────────────────────────────────────────────────
+
+API_KEY_PREFIX = "cds_"
+
+
+def regenerate_api_key(user_id: int) -> str:
+    """Issue a fresh API key for the user, replacing any existing one."""
+    new_key = API_KEY_PREFIX + secrets.token_urlsafe(32)
+    with _connect() as conn:
+        conn.execute("UPDATE users SET api_key = ? WHERE id = ?", (new_key, user_id))
+    return new_key
+
+
+def get_user_by_api_key(key: str) -> Optional[sqlite3.Row]:
+    if not key:
+        return None
+    with _connect() as conn:
+        return conn.execute(
+            "SELECT * FROM users WHERE api_key = ?", (key,)
+        ).fetchone()
+
+
+def revoke_api_key(user_id: int) -> None:
+    with _connect() as conn:
+        conn.execute("UPDATE users SET api_key = NULL WHERE id = ?", (user_id,))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Daily digest helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def get_users_with_digest() -> list[sqlite3.Row]:
+    """Users who opted into daily digest AND have an email address."""
+    with _connect() as conn:
+        return conn.execute(
+            "SELECT * FROM users WHERE daily_digest = 1 AND email IS NOT NULL AND email != ''"
+        ).fetchall()
+
+
+def mark_digest_sent(user_id: int) -> None:
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE users SET last_digest_at = ? WHERE id = ?", (_now(), user_id)
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Query history (used by digest summaries + audit trail)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def record_query(user_id: int, question: str, bottom_line: str, source: str = "web") -> None:
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO query_history (user_id, question, bottom_line, created_at, source)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (user_id, question, bottom_line or "", _now(), source),
+        )
+
+
+def queries_since(user_id: int, since_iso: str) -> list[sqlite3.Row]:
+    with _connect() as conn:
+        return conn.execute(
+            """
+            SELECT * FROM query_history
+            WHERE user_id = ? AND created_at >= ?
+            ORDER BY created_at DESC
+            """,
+            (user_id, since_iso),
+        ).fetchall()
 
 
 def change_password(user_id: int, new_password: str) -> None:
