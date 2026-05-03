@@ -64,7 +64,35 @@ from scheduler import BackgroundScheduler, should_start_scheduler
 load_dotenv()
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("FLASK_SECRET_KEY", os.urandom(24).hex())
+
+
+def _load_or_create_secret_key() -> str:
+    """Use FLASK_SECRET_KEY if set; otherwise persist a generated key to a
+    local file so it survives Werkzeug debug-reloader restarts. Without
+    persistence, the secret rotates on every reload and invalidates every
+    user's session — breaking login (CSRF token can't be read back)."""
+    env_key = os.environ.get("FLASK_SECRET_KEY")
+    if env_key:
+        return env_key
+    key_path = os.path.join(os.path.dirname(__file__), ".flask_secret")
+    try:
+        with open(key_path, "r") as fh:
+            existing = fh.read().strip()
+            if existing:
+                return existing
+    except FileNotFoundError:
+        pass
+    new_key = _secrets.token_hex(32)
+    try:
+        with open(key_path, "w") as fh:
+            fh.write(new_key)
+        os.chmod(key_path, 0o600)
+    except OSError:
+        pass
+    return new_key
+
+
+app.secret_key = _load_or_create_secret_key()
 # Cookies must be SameSite=None + Secure so they work inside Replit's preview iframe
 # (the workspace hosts the app in a cross-site <iframe>).
 app.config.update(
