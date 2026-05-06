@@ -132,8 +132,9 @@ def _enforce_csrf():
         or request.headers.get("X-Cron-Secret")
     ):
         return None
-    # Allow GET-equivalent endpoints; everything else must present a CSRF token
-    expected = session.get("_csrf_token")
+    # Stateless HMAC-signed CSRF token — validated without needing the
+    # session cookie (which may be blocked by third-party cookie policies
+    # when the app is embedded in a cross-site iframe like Replit's preview).
     submitted = (
         request.headers.get(auth.CSRF_HEADER)
         or (request.form.get(auth.CSRF_FIELD) if request.form else None)
@@ -142,16 +143,11 @@ def _enforce_csrf():
         body = request.get_json(silent=True) or {}
         submitted = body.get(auth.CSRF_FIELD)
 
-    if not expected or not submitted:
-        # On the login/register/forgot/reset POSTs, the session may be empty
-        # before login — initialize a token if needed and reject this request.
-        auth.get_csrf_token()
-        if request.is_json or "application/json" in request.headers.get("Accept", ""):
-            return jsonify({"error": "Invalid or missing CSRF token."}), 400
-        return ("Invalid or missing CSRF token. Please refresh and try again.", 400)
-
-    import secrets as _s
-    if not _s.compare_digest(str(expected), str(submitted)):
+    if not submitted or not auth._verify_csrf_token(submitted):
+        app.logger.warning(
+            "CSRF reject path=%s submitted_present=%s",
+            request.path, bool(submitted),
+        )
         if request.is_json or "application/json" in request.headers.get("Accept", ""):
             return jsonify({"error": "Invalid or missing CSRF token."}), 400
         return ("Invalid or missing CSRF token. Please refresh and try again.", 400)

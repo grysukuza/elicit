@@ -482,32 +482,66 @@ def safe_next_url(target: Optional[str], default: str = "/") -> str:
 
 CSRF_FIELD = "csrf_token"
 CSRF_HEADER = "X-CSRF-Token"
+CSRF_TTL_SECONDS = 8 * 3600  # 8 hours
+import hmac as _hmac
+import hashlib as _hashlib
+import base64 as _b64
+import time as _time
+
+
+def _csrf_secret() -> bytes:
+    """Use Flask's secret_key as the HMAC key for stateless CSRF tokens."""
+    from flask import current_app
+    sk = current_app.secret_key
+    if isinstance(sk, str):
+        return sk.encode("utf-8")
+    return sk or b""
 
 
 def get_csrf_token() -> str:
-    token = session.get("_csrf_token")
-    if not token:
-        token = secrets.token_urlsafe(32)
-        session["_csrf_token"] = token
-    return token
+    """Issue a stateless HMAC-signed CSRF token.
+
+    Format: <random_nonce>.<unix_ts>.<hmac_sha256(secret, nonce+ts)>
+    Validation requires only the server's secret_key, not the session cookie.
+    This makes the token survive third-party-cookie blocking inside iframes.
+    """
+    nonce = secrets.token_urlsafe(16)
+    ts = str(int(_time.time()))
+    sig = _hmac.new(
+        _csrf_secret(), f"{nonce}.{ts}".encode("utf-8"), _hashlib.sha256
+    ).digest()
+    sig_b64 = _b64.urlsafe_b64encode(sig).decode("ascii").rstrip("=")
+    return f"{nonce}.{ts}.{sig_b64}"
 
 
 def _csrf_safe_method() -> bool:
     return request.method in ("GET", "HEAD", "OPTIONS")
 
 
-def _check_csrf() -> bool:
-    expected = session.get("_csrf_token")
-    if not expected:
+def _verify_csrf_token(token: str) -> bool:
+    if not token or token.count(".") != 2:
         return False
+    nonce, ts, sig_b64 = token.split(".")
+    try:
+        ts_int = int(ts)
+    except ValueError:
+        return False
+    if abs(_time.time() - ts_int) > CSRF_TTL_SECONDS:
+        return False
+    expected_sig = _hmac.new(
+        _csrf_secret(), f"{nonce}.{ts}".encode("utf-8"), _hashlib.sha256
+    ).digest()
+    expected_b64 = _b64.urlsafe_b64encode(expected_sig).decode("ascii").rstrip("=")
+    return _hmac.compare_digest(expected_b64, sig_b64)
+
+
+def _check_csrf() -> bool:
     submitted = (
         request.headers.get(CSRF_HEADER)
         or (request.form.get(CSRF_FIELD) if request.form else None)
         or (request.get_json(silent=True) or {}).get(CSRF_FIELD)
     )
-    if not submitted:
-        return False
-    return secrets.compare_digest(str(expected), str(submitted))
+    return _verify_csrf_token(submitted) if submitted else False
 
 
 def csrf_protect(view):
