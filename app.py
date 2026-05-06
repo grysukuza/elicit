@@ -100,6 +100,39 @@ app.config.update(
     SESSION_COOKIE_SECURE=True,
     SESSION_COOKIE_HTTPONLY=True,
 )
+
+
+class _PartitionedCookieMiddleware:
+    """WSGI middleware that adds `Partitioned` to every Set-Cookie using
+    SameSite=None. Modern browsers (Chrome 114+, etc.) require the CHIPS
+    `Partitioned` attribute for cookies set inside cross-site iframes (like
+    Replit's preview pane). Without it, the cookie is silently dropped and
+    login state is lost on every navigation.
+
+    This must run as WSGI middleware (not Flask after_request) because
+    Flask's session cookie is added by `SecureCookieSessionInterface` in
+    `app.process_response`, which runs *after* every after_request handler.
+    """
+
+    def __init__(self, wrapped):
+        self.wrapped = wrapped
+
+    def __call__(self, environ, start_response):
+        def _start(status, headers, exc_info=None):
+            new_headers = []
+            for name, value in headers:
+                if (
+                    name.lower() == "set-cookie"
+                    and "samesite=none" in value.lower()
+                    and "partitioned" not in value.lower()
+                ):
+                    value = value + "; Partitioned"
+                new_headers.append((name, value))
+            return start_response(status, new_headers, exc_info)
+        return self.wrapped(environ, _start)
+
+
+app.wsgi_app = _PartitionedCookieMiddleware(app.wsgi_app)
 app.permanent_session_lifetime = timedelta(days=auth.SESSION_DAYS)
 
 # Initialize auth DB at startup
