@@ -2,15 +2,42 @@
 {% block content %}
     <!-- ── Input panel ───────────────────────────────────────────── -->
     <section class="card" id="input-panel">
-      <h2>Enter Clinical Question</h2>
-      <p class="hint">Describe the patient, situation, and what you want to know.
-         The system will extract PICO elements and search 138M+ papers.</p>
+      <div class="section-heading-row">
+        <div>
+          <h2>Clinical Case Workspace</h2>
+          <p class="hint">Enter the case once, then choose a prompt button for the clinical task you want answered.
+             The system will extract PICO elements and search 138M+ papers.</p>
+        </div>
+        <a class="settings-shortcut" href="{{ url_for('settings') }}#api-access">API access</a>
+      </div>
+
+      <label class="input-label" for="case-text">Clinical case</label>
+      <textarea id="case-text"
+                placeholder="e.g. 65-year-old man with newly diagnosed atrial fibrillation, hypertension, CKD stage 3, CHA2DS2-VASc score of 3, and no prior bleeding. He is deciding between apixaban and warfarin for stroke prevention."
+                rows="7"></textarea>
+
+      <label class="input-label" for="query-text">Focused clinical question <span class="optional">(optional)</span></label>
       <textarea id="query-text"
-                placeholder="e.g. 65-year-old man with newly diagnosed atrial fibrillation and CHA2DS2-VASc score of 3. Should he receive anticoagulation with a DOAC vs. warfarin to prevent stroke?"
-                rows="5"></textarea>
-      <div class="btn-row">
+                placeholder="e.g. In this patient, should a DOAC be preferred over warfarin to reduce stroke while minimizing major bleeding?"
+                rows="3"></textarea>
+
+      <div class="prompt-toolbar" aria-label="Clinical prompt buttons">
+        {% for option in prompt_options %}
+          <button type="button"
+                  class="prompt-btn{% if loop.first %} active{% endif %}"
+                  data-prompt-type="{{ option.key }}"
+                  data-description="{{ option.description }}"
+                  onclick="selectPromptType(this)">
+            {{ option.label }}
+          </button>
+        {% endfor %}
+      </div>
+      <p class="prompt-description" id="prompt-description">{{ prompt_options[0].description }}</p>
+
+      <div class="btn-row split">
+        <button type="button" class="btn-secondary" onclick="loadExampleCase()">Load example case</button>
         <button id="analyze-btn" class="btn-primary" onclick="runAnalysis()">
-          Analyze
+          Analyze selected prompt
         </button>
       </div>
     </section>
@@ -100,16 +127,33 @@
 {% block scripts %}
   <script>
     let currentResultId = null;
+    let selectedPromptType = '{{ prompt_options[0].key }}';
     const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]')?.content || '';
     function csrfHeaders(extra) {
       return Object.assign({'X-CSRF-Token': CSRF_TOKEN}, extra || {});
     }
 
-    async function runAnalysis() {
-      const text = document.getElementById('query-text').value.trim();
-      if (!text) { showError('Please enter a clinical question.'); return; }
+    function selectPromptType(button) {
+      selectedPromptType = button.dataset.promptType;
+      document.querySelectorAll('.prompt-btn').forEach(btn => btn.classList.remove('active'));
+      button.classList.add('active');
+      document.getElementById('prompt-description').textContent = button.dataset.description || '';
+    }
 
-      setSpinner(true, 'Parsing clinical question\u2026');
+    function loadExampleCase() {
+      document.getElementById('case-text').value = '72-year-old woman with type 2 diabetes, hypertension, CKD stage 3, and newly diagnosed non-valvular atrial fibrillation. She has no history of major bleeding, takes lisinopril and metformin, and wants to understand whether apixaban is safer and more effective than warfarin for stroke prevention.';
+      document.getElementById('query-text').value = 'Should apixaban be preferred over warfarin to prevent stroke while minimizing major bleeding?';
+    }
+
+    async function runAnalysis() {
+      const clinicalCase = document.getElementById('case-text').value.trim();
+      const focusQuestion = document.getElementById('query-text').value.trim();
+      if (!clinicalCase && !focusQuestion) {
+        showError('Please enter a clinical case or focused clinical question.');
+        return;
+      }
+
+      setSpinner(true, 'Preparing selected clinical prompt\u2026');
       hideResults();
       hideError();
 
@@ -119,7 +163,11 @@
         const resp = await fetch('/analyze', {
           method: 'POST',
           headers: csrfHeaders({'Content-Type': 'application/json'}),
-          body: JSON.stringify({text}),
+          body: JSON.stringify({
+            clinical_case: clinicalCase,
+            focus_question: focusQuestion,
+            prompt_type: selectedPromptType,
+          }),
         });
         data = await resp.json();
         if (!resp.ok) { throw new Error(data.error || 'Server error'); }

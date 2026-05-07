@@ -57,6 +57,11 @@ from dotenv import load_dotenv
 from pipeline import run_pipeline
 from pdf_generator import generate_pdf
 from paper_evaluator import evaluate_paper, papers_to_bibtex, papers_to_ris
+from clinical_prompts import (
+    build_clinical_prompt,
+    prompt_options,
+    prompt_type_from_payload,
+)
 import auth
 import email_inbox
 from scheduler import BackgroundScheduler, should_start_scheduler
@@ -205,17 +210,26 @@ def _own_result(result_id: str | None) -> dict | None:
 @app.route("/")
 @auth.login_required
 def index():
-    return render_template("index.html")
+    return render_template("index.html", prompt_options=prompt_options())
 
 
 @app.route("/analyze", methods=["POST"])
 @auth.login_required
 def analyze():
     data = request.get_json(silent=True) or {}
-    free_text = (data.get("text") or "").strip()
+    clinical_case = (data.get("clinical_case") or data.get("case") or "").strip()
+    focus_question = (data.get("focus_question") or data.get("question") or "").strip()
+    legacy_text = (data.get("text") or "").strip()
+    prompt_type = prompt_type_from_payload(data)
+    free_text = build_clinical_prompt(
+        clinical_case=clinical_case,
+        focus_question=focus_question,
+        prompt_type=prompt_type,
+        legacy_text=legacy_text,
+    )
 
     if not free_text:
-        return jsonify({"error": "No text provided."}), 400
+        return jsonify({"error": "Enter a clinical case or focused question."}), 400
 
     try:
         output = run_pipeline(free_text)
@@ -238,7 +252,7 @@ def analyze():
             user["id"],
             free_text,
             output.get("result", {}).get("clinical_bottom_line", ""),
-            source="web",
+            source=f"web:{prompt_type}",
         )
     except Exception:
         app.logger.exception("Failed to record query history")
@@ -784,6 +798,12 @@ def api_health():
     })
 
 
+@app.route("/api/v1/prompts", methods=["GET"])
+@api_key_required
+def api_prompts():
+    return jsonify({"prompt_types": prompt_options()})
+
+
 @app.route("/api/v1/me", methods=["GET"])
 @api_key_required
 def api_me():
@@ -802,9 +822,18 @@ def api_me():
 @api_key_required
 def api_analyze():
     data = request.get_json(silent=True) or {}
-    question = (data.get("question") or data.get("text") or "").strip()
+    clinical_case = (data.get("clinical_case") or data.get("case") or "").strip()
+    focus_question = (data.get("focus_question") or data.get("question") or "").strip()
+    legacy_text = (data.get("text") or "").strip()
+    prompt_type = prompt_type_from_payload(data)
+    question = build_clinical_prompt(
+        clinical_case=clinical_case,
+        focus_question=focus_question,
+        prompt_type=prompt_type,
+        legacy_text=legacy_text,
+    )
     if not question:
-        return jsonify({"error": "Field 'question' is required."}), 400
+        return jsonify({"error": "Field 'clinical_case' or 'question' is required."}), 400
 
     try:
         max_papers = int(data.get("max_papers", 20))
@@ -824,7 +853,7 @@ def api_analyze():
             user["id"],
             question,
             output.get("result", {}).get("clinical_bottom_line", ""),
-            source="api",
+            source=f"api:{prompt_type}",
         )
     except Exception:
         app.logger.exception("Failed to record API query history")
