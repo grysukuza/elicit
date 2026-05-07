@@ -6,6 +6,7 @@ Verifies: probability calculations, PDF generation, plain-text rendering.
 import json
 import sys
 import os
+import tempfile
 
 # ── 1. Probability estimate math ─────────────────────────────────────────────
 print("=" * 60)
@@ -147,7 +148,7 @@ print("=" * 60)
 from pdf_generator import generate_pdf
 
 pdf_bytes = generate_pdf(mock_result)
-pdf_path = "/Users/kuzak/Documents/python/elicit/sample_report.pdf"
+pdf_path = os.path.join(tempfile.gettempdir(), "elicit_sample_report.pdf")
 with open(pdf_path, "wb") as f:
     f.write(pdf_bytes)
 
