@@ -46,7 +46,7 @@
   </form>
 </section>
 
-<section class="card">
+<section class="card" id="api-access">
   <h2>API access</h2>
   <p class="hint">
     Use your API key to query this service programmatically. Send it as
@@ -92,7 +92,11 @@ curl {{ api_base_url }}/api/v1/health
 curl -X POST {{ api_base_url }}/api/v1/analyze \
      -H "Authorization: Bearer YOUR_API_KEY" \
      -H "Content-Type: application/json" \
-     -d '{"question": "65yo with afib, DOAC vs warfarin?"}'
+     -d '{"clinical_case": "65yo with afib and CKD3", "focus_question": "DOAC vs warfarin?", "prompt_type": "treatment"}'
+
+# List available clinical prompt buttons
+curl {{ api_base_url }}/api/v1/prompts \
+     -H "Authorization: Bearer YOUR_API_KEY"
 
 # Get account info
 curl {{ api_base_url }}/api/v1/me \

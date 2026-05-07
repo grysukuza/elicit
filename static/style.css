@@ -742,3 +742,78 @@ footer {
   .ref-card { flex-direction: column; gap: 6px; }
   .ref-num { text-align: left; }
 }
+
+/* ── Clinical case workspace ─────────────────────────────────── */
+.section-heading-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.settings-shortcut {
+  background: #eef4fb;
+  color: #1a3a5c;
+  border: 1px solid #c8d8ea;
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.settings-shortcut:hover { background: #dbeaf8; }
+.input-label {
+  display: block;
+  color: #1a3a5c;
+  font-size: 0.84rem;
+  font-weight: 700;
+  margin: 14px 0 6px;
+}
+.optional {
+  color: #667085;
+  font-weight: 500;
+}
+.prompt-toolbar {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+  margin-top: 14px;
+}
+.prompt-btn {
+  border: 1.5px solid #c8d8ea;
+  border-radius: 8px;
+  background: #f8fbfe;
+  color: #1a3a5c;
+  cursor: pointer;
+  font-weight: 700;
+  padding: 9px 10px;
+  transition: border-color .15s, box-shadow .15s, background .15s;
+}
+.prompt-btn:hover {
+  border-color: #2a6496;
+  background: #eef4fb;
+}
+.prompt-btn.active {
+  background: #1a3a5c;
+  border-color: #1a3a5c;
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(26, 58, 92, .22);
+}
+.prompt-description {
+  color: #555;
+  font-size: 0.86rem;
+  margin-top: 8px;
+}
+.btn-row.split {
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 600px) {
+  .btn-row.split { flex-direction: column; align-items: stretch; }
+  .btn-row.split .btn-primary,
+  .btn-row.split .btn-secondary { text-align: center; }
+}
