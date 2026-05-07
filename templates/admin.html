@@ -11,6 +11,29 @@
     {% endif %}
   </p>
 
+  <div class="admin-stats" aria-label="Admin overview">
+    <div class="stat-card">
+      <span class="stat-label">Total users</span>
+      <strong>{{ stats.total_users }}</strong>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">Admins</span>
+      <strong>{{ stats.admin_users }}</strong>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">Standard users</span>
+      <strong>{{ stats.standard_users }}</strong>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">Pending resets</span>
+      <strong>{{ stats.pending_resets }}</strong>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">SMTP</span>
+      <strong>{{ stats.smtp_status }}</strong>
+    </div>
+  </div>
+
   <h3 class="subheading">Users ({{ users|length }})</h3>
   <table class="admin-table">
     <thead>

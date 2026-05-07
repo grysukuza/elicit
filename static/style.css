@@ -638,6 +638,31 @@ footer {
   text-transform: uppercase;
   letter-spacing: .04em;
 }
+.admin-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px;
+  margin: 16px 0 20px;
+}
+.stat-card {
+  background: #f5f9fe;
+  border: 1px solid #d0e3f5;
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+.stat-label {
+  display: block;
+  color: #555;
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: .05em;
+  margin-bottom: 5px;
+  text-transform: uppercase;
+}
+.stat-card strong {
+  color: #1a3a5c;
+  font-size: 1.15rem;
+}
 .admin-table {
   width: 100%;
   border-collapse: collapse;
