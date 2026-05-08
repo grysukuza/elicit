@@ -84,7 +84,8 @@
           &#x1F4C4; Download PDF Report
         </a>
         <div class="email-group">
-          <input type="email" id="email-input"
+          <input type="text" inputmode="email" autocomplete="email"
+                 id="email-input"
                  placeholder="physician@hospital.org"
                  value="{{ current_user['email'] or '' }}" />
           <button class="btn-secondary" onclick="sendEmail()">&#x2709; Email Report</button>
@@ -465,10 +466,15 @@
       `;
     }
 
+    const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     async function sendEmail() {
       const email = document.getElementById('email-input').value.trim();
       const status = document.getElementById('email-status');
       if (!email) { status.textContent = 'Please enter an email address.'; return; }
+      if (!EMAIL_RE.test(email)) {
+        status.textContent = 'That doesn\u2019t look like a valid email address.';
+        return;
+      }
       if (!currentResultId) { status.textContent = 'Run an analysis first.'; return; }
       status.textContent = 'Sending\u2026';
       try {
@@ -477,10 +483,15 @@
           headers: csrfHeaders({'Content-Type': 'application/json'}),
           body: JSON.stringify({email, result_id: currentResultId}),
         });
-        const data = await resp.json();
-        status.textContent = data.message || data.error || 'Done.';
+        let data = {};
+        try { data = await resp.json(); } catch (_) { /* non-JSON response */ }
+        if (!resp.ok) {
+          status.textContent = data.error || ('Failed (HTTP ' + resp.status + ').');
+          return;
+        }
+        status.textContent = data.message || 'Done.';
       } catch (e) {
-        status.textContent = 'Failed: ' + e.message;
+        status.textContent = 'Failed: ' + (e && e.message ? e.message : 'network error');
       }
     }
 
