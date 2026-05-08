@@ -8,6 +8,7 @@ import time
 from typing import Optional, List
 import requests
 from requests import RequestException
+from requests.exceptions import JSONDecodeError
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -17,7 +18,9 @@ DEFAULT_TIMEOUT = 30  # seconds
 
 
 def _headers() -> dict:
-    key = os.environ.get("ELICIT_API_KEY", "").strip().strip("\"'")
+    key = os.environ.get("ELICIT_API_KEY", "").strip()
+    if len(key) >= 2 and key[0] == key[-1] and key[0] in ("'", '"'):
+        key = key[1:-1].strip()
     if not key:
         raise EnvironmentError("ELICIT_API_KEY not set in environment / .env")
     return {
@@ -31,8 +34,9 @@ def _raise_api_error(resp: requests.Response, operation: str) -> None:
     try:
         body = resp.json()
         detail = body.get("error") or body.get("message") or "No detail provided."
-    except ValueError:
-        detail = (resp.text or "").strip()[:300] or "No detail provided."
+        detail = str(detail).strip()[:120]
+    except JSONDecodeError:
+        detail = "Unexpected non-JSON error response."
     raise RuntimeError(
         f"Elicit API {operation} failed ({resp.status_code}): {detail}"
     )
