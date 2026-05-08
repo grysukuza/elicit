@@ -39,8 +39,17 @@ def _raise_api_error(resp: requests.Response, operation: str) -> None:
     """Raise a readable error for failed Elicit requests."""
     try:
         body = resp.json()
-        detail = body.get("error") or body.get("message") or "No detail provided."
-        detail = str(detail).strip()[:MAX_ERROR_DETAIL_LENGTH]
+        detail = None
+        if isinstance(body, dict):
+            if "error" in body and body["error"] is not None:
+                detail = str(body["error"])
+            elif "message" in body and body["message"] is not None:
+                detail = str(body["message"])
+        if detail is None:
+            detail = "No detail provided."
+        detail = detail.strip()
+        if len(detail) > MAX_ERROR_DETAIL_LENGTH:
+            detail = detail[:MAX_ERROR_DETAIL_LENGTH - 3] + "..."
     except JSONDecodeError:
         detail = "Unexpected non-JSON error response."
     raise RuntimeError(
