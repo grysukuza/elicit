@@ -6,6 +6,7 @@ Wraps the search and reports endpoints at https://elicit.com/api/v1/
 import os
 import time
 from typing import Optional, List
+from urllib.parse import urljoin
 import requests
 from requests import RequestException
 from requests.exceptions import JSONDecodeError
@@ -15,6 +16,7 @@ load_dotenv()
 
 BASE_URL = os.environ.get("ELICIT_API_BASE_URL", "https://elicit.com/api/v1").rstrip("/")
 DEFAULT_TIMEOUT = 30  # seconds
+MAX_ERROR_DETAIL_LENGTH = 120
 
 
 def _headers() -> dict:
@@ -29,12 +31,16 @@ def _headers() -> dict:
     }
 
 
+def _api_url(path: str) -> str:
+    return urljoin(f"{BASE_URL}/", path.lstrip("/"))
+
+
 def _raise_api_error(resp: requests.Response, operation: str) -> None:
     """Raise a readable error for failed Elicit requests."""
     try:
         body = resp.json()
         detail = body.get("error") or body.get("message") or "No detail provided."
-        detail = str(detail).strip()[:120]
+        detail = str(detail).strip()[:MAX_ERROR_DETAIL_LENGTH]
     except JSONDecodeError:
         detail = "Unexpected non-JSON error response."
     raise RuntimeError(
@@ -76,7 +82,7 @@ def search_papers(
 
     try:
         resp = requests.post(
-            f"{BASE_URL}/search",
+            _api_url("/search"),
             json=payload,
             headers=_headers(),
             timeout=DEFAULT_TIMEOUT,
@@ -113,7 +119,7 @@ def create_report(
     }
     try:
         resp = requests.post(
-            f"{BASE_URL}/reports",
+            _api_url("/reports"),
             json=payload,
             headers=_headers(),
             timeout=DEFAULT_TIMEOUT,
@@ -135,7 +141,7 @@ def get_report(report_id: str, include_body: bool = True) -> dict:
         params["include"] = "reportBody"
     try:
         resp = requests.get(
-            f"{BASE_URL}/reports/{report_id}",
+            _api_url(f"/reports/{report_id}"),
             params=params,
             headers=_headers(),
             timeout=DEFAULT_TIMEOUT,
