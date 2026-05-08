@@ -155,15 +155,12 @@ def _enforce_csrf():
     """CSRF protection for all state-changing requests."""
     if request.method in ("GET", "HEAD", "OPTIONS"):
         return None
-    # /api/ routes authenticate via bearer key or X-Cron-Secret header — these
-    # are not sent automatically by browsers, so they're CSRF-immune. We only
-    # exempt the request from CSRF when one of those auth headers is present;
-    # otherwise (e.g. a future cookie-authed /api/ route) CSRF still applies.
-    if request.path.startswith("/api/") and (
-        request.headers.get("Authorization", "").lower().startswith("bearer ")
-        or request.headers.get("X-API-Key")
-        or request.headers.get("X-Cron-Secret")
-    ):
+    # /api/ routes never use cookie-based auth (only bearer keys and the
+    # X-Cron-Secret header), so they are inherently CSRF-immune. Exempt the
+    # whole /api/ namespace unconditionally — otherwise callers who forget
+    # their key get a confusing "Invalid CSRF token" 400 instead of a clean
+    # 401 "Invalid or missing API key" from the api_key_required decorator.
+    if request.path.startswith("/api/"):
         return None
     # Stateless HMAC-signed CSRF token — validated without needing the
     # session cookie (which may be blocked by third-party cookie policies
