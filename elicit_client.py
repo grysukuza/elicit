@@ -14,15 +14,15 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Override for environments that proxy Elicit or expose versioned paths.
 BASE_URL = os.environ.get("ELICIT_API_BASE_URL", "https://elicit.com/api/v1").rstrip("/")
 DEFAULT_TIMEOUT = 30  # seconds
 MAX_ERROR_DETAIL_LENGTH = 120
+ELLIPSIS = "..."
 
 
 def _headers() -> dict:
     key = os.environ.get("ELICIT_API_KEY", "").strip()
-    if len(key) >= 2 and key[0] == key[-1] and key[0] in ("'", '"'):
-        key = key[1:-1].strip()
     if not key:
         raise EnvironmentError("ELICIT_API_KEY not set in environment / .env")
     return {
@@ -49,7 +49,7 @@ def _raise_api_error(resp: requests.Response, operation: str) -> None:
             detail = "No detail provided."
         detail = detail.strip()
         if len(detail) > MAX_ERROR_DETAIL_LENGTH:
-            detail = detail[:MAX_ERROR_DETAIL_LENGTH - 3] + "..."
+            detail = detail[:MAX_ERROR_DETAIL_LENGTH - len(ELLIPSIS)] + ELLIPSIS
     except JSONDecodeError:
         detail = "Unexpected non-JSON error response."
     raise RuntimeError(
