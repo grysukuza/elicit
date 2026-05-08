@@ -16,8 +16,8 @@ load_dotenv()
 # Override for environments that proxy Elicit or expose versioned paths.
 BASE_URL = os.environ.get("ELICIT_API_BASE_URL", "https://elicit.com/api/v1").rstrip("/")
 DEFAULT_TIMEOUT = 30  # seconds
-MAX_ERROR_DETAIL_LENGTH = 120
-ELLIPSIS = "..."
+MAX_ERROR_MESSAGE_LENGTH = 120
+TRUNCATION_INDICATOR = "..."
 
 
 def _headers() -> dict:
@@ -47,9 +47,9 @@ def _raise_api_error(resp: requests.Response, operation: str) -> None:
         if detail is None:
             detail = "No detail provided."
         detail = detail.strip()
-        if len(detail) > MAX_ERROR_DETAIL_LENGTH:
-            cut = max(1, MAX_ERROR_DETAIL_LENGTH - len(ELLIPSIS))
-            detail = detail[:cut] + ELLIPSIS
+        if len(detail) > MAX_ERROR_MESSAGE_LENGTH:
+            cut = max(0, MAX_ERROR_MESSAGE_LENGTH - len(TRUNCATION_INDICATOR))
+            detail = detail[:cut] + TRUNCATION_INDICATOR
     except JSONDecodeError:
         detail = "Unexpected non-JSON error response."
     raise RuntimeError(
