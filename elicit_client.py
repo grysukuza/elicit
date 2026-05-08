@@ -7,22 +7,35 @@ import os
 import time
 from typing import Optional, List
 import requests
+from requests import RequestException
 from dotenv import load_dotenv
 
 load_dotenv()
 
-BASE_URL = "https://elicit.com/api/v1"
+BASE_URL = os.environ.get("ELICIT_API_BASE_URL", "https://elicit.com/api/v1").rstrip("/")
 DEFAULT_TIMEOUT = 30  # seconds
 
 
 def _headers() -> dict:
-    key = os.environ.get("ELICIT_API_KEY", "")
+    key = os.environ.get("ELICIT_API_KEY", "").strip().strip("'").strip('"')
     if not key:
         raise EnvironmentError("ELICIT_API_KEY not set in environment / .env")
     return {
         "Authorization": f"Bearer {key}",
+        "X-API-Key": key,
         "Content-Type": "application/json",
     }
+
+
+def _raise_api_error(resp: requests.Response, operation: str) -> None:
+    """Raise a readable error for failed Elicit requests."""
+    try:
+        body = resp.json()
+    except Exception:
+        body = resp.text
+    raise RuntimeError(
+        f"Elicit API {operation} failed ({resp.status_code}): {body}"
+    )
 
 
 def search_papers(
@@ -57,17 +70,21 @@ def search_papers(
     filters["retracted"] = "exclude_retracted"
     payload["filters"] = filters
 
-    resp = requests.post(
-        f"{BASE_URL}/search",
-        json=payload,
-        headers=_headers(),
-        timeout=DEFAULT_TIMEOUT,
-    )
+    try:
+        resp = requests.post(
+            f"{BASE_URL}/search",
+            json=payload,
+            headers=_headers(),
+            timeout=DEFAULT_TIMEOUT,
+        )
+    except RequestException as exc:
+        raise RuntimeError(f"Elicit API search request failed: {exc}") from exc
 
     if resp.status_code == 429:
         reset = resp.headers.get("X-RateLimit-Reset", "unknown")
         raise RuntimeError(f"Elicit rate limit exceeded. Resets at: {reset}")
-    resp.raise_for_status()
+    if not resp.ok:
+        _raise_api_error(resp, "search")
 
     data = resp.json()
     papers = data.get("papers", [])
@@ -90,13 +107,17 @@ def create_report(
         "maxExtractPapers": max_extract_papers,
         "isPublic": is_public,
     }
-    resp = requests.post(
-        f"{BASE_URL}/reports",
-        json=payload,
-        headers=_headers(),
-        timeout=DEFAULT_TIMEOUT,
-    )
-    resp.raise_for_status()
+    try:
+        resp = requests.post(
+            f"{BASE_URL}/reports",
+            json=payload,
+            headers=_headers(),
+            timeout=DEFAULT_TIMEOUT,
+        )
+    except RequestException as exc:
+        raise RuntimeError(f"Elicit API report creation failed: {exc}") from exc
+    if not resp.ok:
+        _raise_api_error(resp, "create_report")
     return resp.json()
 
 
@@ -108,13 +129,17 @@ def get_report(report_id: str, include_body: bool = True) -> dict:
     params = {}
     if include_body:
         params["include"] = "reportBody"
-    resp = requests.get(
-        f"{BASE_URL}/reports/{report_id}",
-        params=params,
-        headers=_headers(),
-        timeout=DEFAULT_TIMEOUT,
-    )
-    resp.raise_for_status()
+    try:
+        resp = requests.get(
+            f"{BASE_URL}/reports/{report_id}",
+            params=params,
+            headers=_headers(),
+            timeout=DEFAULT_TIMEOUT,
+        )
+    except RequestException as exc:
+        raise RuntimeError(f"Elicit API report fetch failed: {exc}") from exc
+    if not resp.ok:
+        _raise_api_error(resp, "get_report")
     return resp.json()
 
 
