@@ -473,14 +473,19 @@ def login():
         return redirect(url_for("index"))
 
     if request.method == "POST":
-        username = (request.form.get("username") or "").strip()
+        # Accept either a username or an email address in the same field
+        identifier = (
+            request.form.get("identifier")
+            or request.form.get("username")
+            or ""
+        ).strip()
         password = request.form.get("password") or ""
         remember = bool(request.form.get("remember"))
 
-        user = auth.verify_credentials(username, password)
+        user = auth.verify_credentials(identifier, password)
         if not user:
-            flash("Invalid username or password.", "error")
-            return render_template("login.html", username=username), 401
+            flash("Invalid email/username or password.", "error")
+            return render_template("login.html", identifier=identifier), 401
 
         auth.login_user(user["id"], remember=remember)
         auth.touch_last_login(user["id"])

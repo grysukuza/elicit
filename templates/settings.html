@@ -1,6 +1,36 @@
 {% extends "_base.html" %}
 {% block title %}Settings — Clinical Decision Support{% endblock %}
 
+{% block scripts %}
+<script>
+document.addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-copy-target]");
+  if (!btn) return;
+  const target = document.querySelector(btn.dataset.copyTarget);
+  if (!target) return;
+  const text = target.value || target.textContent || "";
+  let ok = false;
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      ok = true;
+    } else {
+      target.focus(); target.select();
+      ok = document.execCommand("copy");
+    }
+  } catch (_) { ok = false; }
+  const original = btn.dataset.originalLabel || btn.textContent;
+  btn.dataset.originalLabel = original;
+  btn.textContent = ok ? "Copied!" : "Press Ctrl+C";
+  btn.classList.toggle("copied", ok);
+  setTimeout(() => {
+    btn.textContent = original;
+    btn.classList.remove("copied");
+  }, 2000);
+});
+</script>
+{% endblock %}
+
 {% block content %}
 <section class="card">
   <h2>Account settings</h2>
@@ -57,8 +87,12 @@
   {% if just_issued %}
     <div class="api-key-box new">
       <strong>Your new API key (copy it now — it won't be shown again):</strong>
-      <input type="text" class="reset-url" readonly value="{{ just_issued }}"
-             onclick="this.select();" />
+      <div class="copy-row">
+        <input type="text" id="newApiKey" class="reset-url" readonly
+               value="{{ just_issued }}" onclick="this.select();" />
+        <button type="button" class="btn-mini copy-btn"
+                data-copy-target="#newApiKey">Copy</button>
+      </div>
     </div>
   {% elif user['api_key'] %}
     <p class="hint">An API key is currently active for your account

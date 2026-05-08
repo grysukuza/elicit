@@ -165,8 +165,14 @@ def create_user(
         return cur.lastrowid
 
 
-def verify_credentials(username: str, password: str) -> Optional[sqlite3.Row]:
-    user = get_user_by_username(username)
+def verify_credentials(identifier: str, password: str) -> Optional[sqlite3.Row]:
+    """Look up a user by username OR email, then check the password."""
+    identifier = (identifier or "").strip()
+    if not identifier:
+        return None
+    user = get_user_by_username(identifier)
+    if not user and "@" in identifier:
+        user = get_user_by_email(identifier)
     if user and check_password_hash(user["password_hash"], password):
         return user
     return None
