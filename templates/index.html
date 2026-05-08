@@ -106,50 +106,91 @@
       return Object.assign({'X-CSRF-Token': CSRF_TOKEN}, extra || {});
     }
 
+    function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+    function describeNetworkError(msg) {
+      // Safari uses "Load failed"; Chrome uses "Failed to fetch"; Firefox "NetworkError".
+      // For a short polling request (<10s) any of these means the network blipped.
+      return 'Network connection interrupted while checking analysis status. ' +
+             'Please check your connection and try again. (' + msg + ')';
+    }
+
+    async function pollJob(jobId, maxMinutes) {
+      const deadline = Date.now() + maxMinutes * 60 * 1000;
+      let consecutiveErrors = 0;
+      while (Date.now() < deadline) {
+        try {
+          const resp = await fetch('/analyze/status/' + encodeURIComponent(jobId), {
+            method: 'GET',
+            headers: {'Accept': 'application/json'},
+          });
+          let body = {};
+          try { body = await resp.json(); } catch (_) {}
+          if (!resp.ok) {
+            throw new Error(body.error || ('Status check failed (HTTP ' + resp.status + ')'));
+          }
+          consecutiveErrors = 0;
+          if (body.stage) setSpinner(true, body.stage);
+          if (body.status === 'done')  return {ok: true,  data: body};
+          if (body.status === 'error') return {ok: false, error: body.error || 'Pipeline failed.'};
+        } catch (e) {
+          // Tolerate a few transient network/proxy hiccups while polling.
+          consecutiveErrors += 1;
+          if (consecutiveErrors >= 5) {
+            const msg = (e && e.message) ? e.message : 'network error';
+            return {ok: false, error: describeNetworkError(msg)};
+          }
+        }
+        await sleep(2000);
+      }
+      return {ok: false, error:
+        'Analysis still running after ' + maxMinutes + ' minutes. ' +
+        'Try a more focused question or check back later.'};
+    }
+
     async function runAnalysis() {
       const text = document.getElementById('query-text').value.trim();
       if (!text) { showError('Please enter a clinical question.'); return; }
 
-      setSpinner(true, 'Parsing clinical question\u2026');
+      setSpinner(true, 'Submitting analysis\u2026');
       hideResults();
       hideError();
 
-      let data;
+      // 1. Submit the job
+      let jobId;
       try {
-        setSpinner(true, 'Searching 138M+ papers via Elicit\u2026');
         const resp = await fetch('/analyze', {
           method: 'POST',
           headers: csrfHeaders({'Content-Type': 'application/json'}),
           body: JSON.stringify({text}),
         });
         let parsed = {};
-        try { parsed = await resp.json(); } catch (_) { /* non-JSON response */ }
+        try { parsed = await resp.json(); } catch (_) {}
         if (!resp.ok) {
           throw new Error(parsed.error || ('Server error (HTTP ' + resp.status + ')'));
         }
-        data = parsed;
+        jobId = parsed.job_id;
+        if (!jobId) throw new Error('Server did not return a job id.');
       } catch (e) {
         setSpinner(false);
         const msg = (e && e.message) ? e.message : 'network error';
-        // Safari shows "Load failed" when the connection drops mid-request,
-        // which on Replit's dev preview usually means the proxy cut us off
-        // because the analysis took longer than its ~60-100s timeout.
         if (/load failed|networkerror|failed to fetch|network error/i.test(msg)) {
-          showError(
-            'The connection dropped before the analysis finished. ' +
-            'Long analyses can exceed the dev preview\u2019s ~90s network timeout. ' +
-            'Try a more focused question, or use the published version of the app ' +
-            '(which allows up to 5 minutes per request).'
-          );
+          showError('Couldn\u2019t reach the server to start the analysis. ' +
+                    'Please check your connection and try again.');
         } else {
           showError(msg);
         }
         return;
       }
 
+      // 2. Poll for completion (up to 8 minutes)
+      setSpinner(true, 'Analyzing\u2026');
+      const outcome = await pollJob(jobId, 8);
       setSpinner(false);
-      currentResultId = data.result_id;
-      renderResults(data);
+      if (!outcome.ok) { showError(outcome.error); return; }
+
+      currentResultId = outcome.data.result_id;
+      renderResults(outcome.data);
     }
 
     function renderResults(data) {

@@ -141,6 +141,101 @@ auth.init_db()
 # In-memory result store keyed by result_id; each entry includes user_id ownership
 _result_store: dict[str, dict] = {}
 
+# In-memory async-job store for /analyze. Each entry:
+#   {
+#     "user_id": int,
+#     "status": "pending" | "running" | "done" | "error",
+#     "stage":  human-readable progress string,
+#     "created_at": datetime,
+#     "finished_at": datetime | None,
+#     "result_id": str | None,   # set on success — also key into _result_store
+#     "output":    dict | None,  # final pipeline output (also stored in _result_store)
+#     "error":     str  | None,
+#     "auto_emailed_to": str | None,
+#   }
+_jobs: dict[str, dict] = {}
+_jobs_lock = threading.Lock()
+_JOB_TTL = timedelta(hours=2)
+
+
+def _cleanup_old_jobs() -> None:
+    """Drop finished jobs older than _JOB_TTL. Called on each enqueue."""
+    cutoff = datetime.now(timezone.utc) - _JOB_TTL
+    with _jobs_lock:
+        stale = [
+            jid for jid, j in _jobs.items()
+            if j.get("finished_at") and j["finished_at"] < cutoff
+        ]
+        for jid in stale:
+            _jobs.pop(jid, None)
+
+
+def _set_job(job_id: str, **fields) -> None:
+    with _jobs_lock:
+        if job_id in _jobs:
+            _jobs[job_id].update(fields)
+
+
+def _run_analyze_job(job_id: str, user_id: int, free_text: str) -> None:
+    """Background worker: runs the pipeline and stores the result on the job."""
+    _set_job(job_id, status="running", stage="Parsing clinical question…")
+    try:
+        # The pipeline is a single synchronous call internally; we can't easily
+        # report sub-stages without refactoring it. The UI shows a generic
+        # "Analyzing…" while this runs.
+        _set_job(job_id, stage="Searching literature & synthesizing evidence…")
+        output = run_pipeline(free_text)
+    except Exception as exc:
+        app.logger.exception("Async pipeline error (job=%s)", job_id)
+        _set_job(
+            job_id,
+            status="error",
+            error=str(exc) or "Pipeline failed.",
+            finished_at=datetime.now(timezone.utc),
+        )
+        return
+
+    # Success — register a result_id and persist into _result_store
+    result_id = uuid.uuid4().hex
+    _result_store[result_id] = {
+        "user_id": user_id,
+        "output": output,
+        "appraisals": {},
+    }
+
+    # Best-effort: record history + auto-email
+    try:
+        auth.record_query(
+            user_id,
+            free_text,
+            output.get("result", {}).get("clinical_bottom_line", ""),
+            source="web",
+        )
+    except Exception:
+        app.logger.exception("Failed to record query history")
+
+    auto_emailed_to = None
+    try:
+        user_row = auth.get_user_by_id(user_id)
+    except Exception:
+        user_row = None
+    if user_row and user_row["auto_email_results"] and user_row["email"]:
+        try:
+            _send_result_email(user_row["email"], output["result"])
+            auto_emailed_to = user_row["email"]
+        except Exception as exc:
+            app.logger.warning("Auto-email failed: %s", exc)
+
+    _set_job(
+        job_id,
+        status="done",
+        stage="Done.",
+        result_id=result_id,
+        output=output,
+        auto_emailed_to=auto_emailed_to,
+        finished_at=datetime.now(timezone.utc),
+    )
+
 
 @app.context_processor
 def inject_user():
@@ -208,50 +303,77 @@ def index():
 @app.route("/analyze", methods=["POST"])
 @auth.login_required
 def analyze():
+    """
+    Kick off an analysis as a background job and return a job id immediately.
+    The client polls GET /analyze/status/<job_id> for progress and the final
+    result. This avoids hitting the dev preview proxy's ~90s request timeout
+    on long pipeline runs.
+    """
     data = request.get_json(silent=True) or {}
     free_text = (data.get("text") or "").strip()
 
     if not free_text:
         return jsonify({"error": "No text provided."}), 400
 
-    try:
-        output = run_pipeline(free_text)
-    except Exception as exc:
-        app.logger.exception("Pipeline error")
-        return jsonify({"error": str(exc)}), 500
+    user = auth.current_user()
+    job_id = uuid.uuid4().hex
+
+    _cleanup_old_jobs()
+    with _jobs_lock:
+        _jobs[job_id] = {
+            "user_id": user["id"],
+            "status": "pending",
+            "stage": "Queued…",
+            "created_at": datetime.now(timezone.utc),
+            "finished_at": None,
+            "result_id": None,
+            "output": None,
+            "error": None,
+            "auto_emailed_to": None,
+        }
+
+    t = threading.Thread(
+        target=_run_analyze_job,
+        args=(job_id, user["id"], free_text),
+        name=f"analyze-{job_id[:8]}",
+        daemon=True,
+    )
+    t.start()
+
+    return jsonify({"job_id": job_id, "status": "pending"}), 202
+
+
+@app.route("/analyze/status/<job_id>", methods=["GET"])
+@auth.login_required
+def analyze_status(job_id):
+    """Poll endpoint for an in-flight /analyze job."""
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        snapshot = dict(job) if job else None
+
+    if not snapshot:
+        return jsonify({"error": "Unknown or expired job id."}), 404
 
     user = auth.current_user()
-    result_id = uuid.uuid4().hex
-    _result_store[result_id] = {
-        "user_id": user["id"],
-        "output": output,
-        "appraisals": {},
+    if snapshot["user_id"] != user["id"]:
+        return jsonify({"error": "Not your job."}), 403
+
+    payload = {
+        "job_id": job_id,
+        "status": snapshot["status"],
+        "stage": snapshot["stage"],
     }
-    session["result_id"] = result_id
-
-    # Record in query history (used by daily digest)
-    try:
-        auth.record_query(
-            user["id"],
-            free_text,
-            output.get("result", {}).get("clinical_bottom_line", ""),
-            source="web",
-        )
-    except Exception:
-        app.logger.exception("Failed to record query history")
-
-    auto_emailed_to = None
-    if user["auto_email_results"] and user["email"]:
-        try:
-            _send_result_email(user["email"], output["result"])
-            auto_emailed_to = user["email"]
-        except Exception as exc:
-            app.logger.warning("Auto-email failed: %s", exc)
-
-    response = {"result_id": result_id, **output}
-    if auto_emailed_to:
-        response["auto_emailed_to"] = auto_emailed_to
-    return jsonify(response)
+    if snapshot["status"] == "done":
+        # Mirror the original /analyze response shape so the UI's renderResults
+        # works without modification.
+        session["result_id"] = snapshot["result_id"]
+        payload["result_id"] = snapshot["result_id"]
+        payload.update(snapshot["output"] or {})
+        if snapshot["auto_emailed_to"]:
+            payload["auto_emailed_to"] = snapshot["auto_emailed_to"]
+    elif snapshot["status"] == "error":
+        payload["error"] = snapshot["error"] or "Pipeline failed."
+    return jsonify(payload)
 
 
 @app.route("/download")
