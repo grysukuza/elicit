@@ -6,7 +6,6 @@ Wraps the search and reports endpoints at https://elicit.com/api/v1/
 import os
 import time
 from typing import Optional, List
-from urllib.parse import urljoin
 import requests
 from requests import RequestException
 from requests.exceptions import JSONDecodeError
@@ -32,7 +31,7 @@ def _headers() -> dict:
 
 
 def _api_url(path: str) -> str:
-    return urljoin(f"{BASE_URL}/", path.lstrip("/"))
+    return f"{BASE_URL}/{path.lstrip('/')}"
 
 
 def _raise_api_error(resp: requests.Response, operation: str) -> None:
@@ -41,15 +40,16 @@ def _raise_api_error(resp: requests.Response, operation: str) -> None:
         body = resp.json()
         detail = None
         if isinstance(body, dict):
-            if "error" in body and body["error"] is not None:
-                detail = str(body["error"])
-            elif "message" in body and body["message"] is not None:
-                detail = str(body["message"])
+            for key in ("error", "message"):
+                if key in body and body[key] is not None:
+                    detail = str(body[key])
+                    break
         if detail is None:
             detail = "No detail provided."
         detail = detail.strip()
         if len(detail) > MAX_ERROR_DETAIL_LENGTH:
-            detail = detail[:MAX_ERROR_DETAIL_LENGTH - len(ELLIPSIS)] + ELLIPSIS
+            cut = max(1, MAX_ERROR_DETAIL_LENGTH - len(ELLIPSIS))
+            detail = detail[:cut] + ELLIPSIS
     except JSONDecodeError:
         detail = "Unexpected non-JSON error response."
     raise RuntimeError(
@@ -97,7 +97,7 @@ def search_papers(
             timeout=DEFAULT_TIMEOUT,
         )
     except RequestException as exc:
-        raise RuntimeError(f"Elicit API search request failed: {exc}") from exc
+        raise RuntimeError("Elicit API search request failed due to network or timeout error.") from exc
 
     if resp.status_code == 429:
         reset = resp.headers.get("X-RateLimit-Reset", "unknown")
@@ -134,7 +134,7 @@ def create_report(
             timeout=DEFAULT_TIMEOUT,
         )
     except RequestException as exc:
-        raise RuntimeError(f"Elicit API report creation failed: {exc}") from exc
+        raise RuntimeError("Elicit API report creation failed due to network or timeout error.") from exc
     if not resp.ok:
         _raise_api_error(resp, "create_report")
     return resp.json()
@@ -156,7 +156,7 @@ def get_report(report_id: str, include_body: bool = True) -> dict:
             timeout=DEFAULT_TIMEOUT,
         )
     except RequestException as exc:
-        raise RuntimeError(f"Elicit API report fetch failed: {exc}") from exc
+        raise RuntimeError("Elicit API report fetch failed due to network or timeout error.") from exc
     if not resp.ok:
         _raise_api_error(resp, "get_report")
     return resp.json()
