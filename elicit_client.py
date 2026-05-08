@@ -17,12 +17,11 @@ DEFAULT_TIMEOUT = 30  # seconds
 
 
 def _headers() -> dict:
-    key = os.environ.get("ELICIT_API_KEY", "").strip().strip("'").strip('"')
+    key = os.environ.get("ELICIT_API_KEY", "").strip().strip("\"'")
     if not key:
         raise EnvironmentError("ELICIT_API_KEY not set in environment / .env")
     return {
         "Authorization": f"Bearer {key}",
-        "X-API-Key": key,
         "Content-Type": "application/json",
     }
 
@@ -31,10 +30,11 @@ def _raise_api_error(resp: requests.Response, operation: str) -> None:
     """Raise a readable error for failed Elicit requests."""
     try:
         body = resp.json()
-    except Exception:
-        body = resp.text
+        detail = body.get("error") or body.get("message") or "No detail provided."
+    except ValueError:
+        detail = (resp.text or "").strip()[:300] or "No detail provided."
     raise RuntimeError(
-        f"Elicit API {operation} failed ({resp.status_code}): {body}"
+        f"Elicit API {operation} failed ({resp.status_code}): {detail}"
     )
 
 
