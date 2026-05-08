@@ -122,11 +122,28 @@
           headers: csrfHeaders({'Content-Type': 'application/json'}),
           body: JSON.stringify({text}),
         });
-        data = await resp.json();
-        if (!resp.ok) { throw new Error(data.error || 'Server error'); }
+        let parsed = {};
+        try { parsed = await resp.json(); } catch (_) { /* non-JSON response */ }
+        if (!resp.ok) {
+          throw new Error(parsed.error || ('Server error (HTTP ' + resp.status + ')'));
+        }
+        data = parsed;
       } catch (e) {
         setSpinner(false);
-        showError(e.message);
+        const msg = (e && e.message) ? e.message : 'network error';
+        // Safari shows "Load failed" when the connection drops mid-request,
+        // which on Replit's dev preview usually means the proxy cut us off
+        // because the analysis took longer than its ~60-100s timeout.
+        if (/load failed|networkerror|failed to fetch|network error/i.test(msg)) {
+          showError(
+            'The connection dropped before the analysis finished. ' +
+            'Long analyses can exceed the dev preview\u2019s ~90s network timeout. ' +
+            'Try a more focused question, or use the published version of the app ' +
+            '(which allows up to 5 minutes per request).'
+          );
+        } else {
+          showError(msg);
+        }
         return;
       }
 

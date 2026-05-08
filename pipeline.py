@@ -12,7 +12,7 @@ from meta_analysis import run_meta_analysis, MetaAnalysisResult
 logger = logging.getLogger(__name__)
 
 
-def run_pipeline(free_text: str, max_papers: int = 20) -> dict:
+def run_pipeline(free_text: str, max_papers: int = 12) -> dict:
     """
     Full pipeline from raw text to MetaAnalysisResult dict.
 
