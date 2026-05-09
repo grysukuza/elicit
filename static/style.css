@@ -140,6 +140,43 @@ textarea:focus { outline: none; border-color: #2a6496; }
 .elapsed-label { color: #8a98a6; }
 .elapsed-time { font-variant-numeric: tabular-nums; font-weight: 600; color: #2a3b4d; }
 .poll-info { color: #8a98a6; font-size: 0.78rem; }
+.stage-list {
+  list-style: none;
+  padding: 0;
+  margin: 6px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.82rem;
+  min-width: 320px;
+  max-width: 460px;
+  width: 100%;
+}
+.stage-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: #f4f7fb;
+  border: 1px solid #e2e8f0;
+  color: #4a5868;
+}
+.stage-row.running {
+  background: #fff7e0;
+  border-color: #f0d264;
+  color: #6a4f00;
+  font-weight: 600;
+}
+.stage-row.done {
+  background: #eef6f0;
+  border-color: #cfe6d3;
+  color: #2c5d36;
+}
+.stage-icon { width: 14px; display: inline-block; text-align: center; }
+.stage-label { flex: 1; }
+.stage-time { font-variant-numeric: tabular-nums; color: #6b7a8a; }
+.stage-row.running .stage-time { color: #8a6500; }
 
 /* ── Results ─────────────────────────────────────────────────── */
 .result-section { margin-bottom: 24px; }

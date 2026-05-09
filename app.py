@@ -146,6 +146,8 @@ _result_store: dict[str, dict] = {}
 #     "user_id": int,
 #     "status": "pending" | "running" | "done" | "error",
 #     "stage":  human-readable progress string,
+#     "stages": list of {name, label, started_at, finished_at, duration_s, info}
+#     "current_stage": name of the in-flight stage (or None)
 #     "created_at": datetime,
 #     "finished_at": datetime | None,
 #     "result_id": str | None,   # set on success — also key into _result_store
@@ -156,6 +158,14 @@ _result_store: dict[str, dict] = {}
 _jobs: dict[str, dict] = {}
 _jobs_lock = threading.Lock()
 _JOB_TTL = timedelta(hours=2)
+
+# Friendly labels for each pipeline stage emitted by pipeline.run_pipeline()
+_STAGE_LABELS = {
+    "parsing":      "Parsing clinical question (Claude)",
+    "searching":    "Searching literature (Elicit)",
+    "synthesizing": "Synthesizing meta-analysis (Claude)",
+    "done":         "Finalizing results",
+}
 
 
 def _cleanup_old_jobs() -> None:
@@ -176,15 +186,45 @@ def _set_job(job_id: str, **fields) -> None:
             _jobs[job_id].update(fields)
 
 
+def _on_stage(job_id: str):
+    """Build an on_stage callback that records per-stage timing on the job."""
+    def cb(name: str, info: dict) -> None:
+        now = datetime.now(timezone.utc)
+        label = _STAGE_LABELS.get(name, name)
+        if name == "synthesizing" and info.get("paper_count") is not None:
+            label = f"Synthesizing meta-analysis (Claude, {info['paper_count']} papers)"
+        with _jobs_lock:
+            job = _jobs.get(job_id)
+            if not job:
+                return
+            stages = job.setdefault("stages", [])
+            # Close out the previous open stage
+            if stages and stages[-1].get("finished_at") is None:
+                prev = stages[-1]
+                prev["finished_at"] = now.isoformat()
+                prev["duration_s"] = round((now - datetime.fromisoformat(prev["started_at"])).total_seconds(), 2)
+            if name == "done":
+                job["current_stage"] = None
+                job["stage"] = "Finalizing results…"
+                return
+            stages.append({
+                "name": name,
+                "label": label,
+                "started_at": now.isoformat(),
+                "finished_at": None,
+                "duration_s": None,
+                "info": info,
+            })
+            job["current_stage"] = name
+            job["stage"] = label + "…"
+    return cb
+
+
 def _run_analyze_job(job_id: str, user_id: int, free_text: str) -> None:
     """Background worker: runs the pipeline and stores the result on the job."""
-    _set_job(job_id, status="running", stage="Parsing clinical question…")
+    _set_job(job_id, status="running", stage="Starting…", stages=[], current_stage=None)
     try:
-        # The pipeline is a single synchronous call internally; we can't easily
-        # report sub-stages without refactoring it. The UI shows a generic
-        # "Analyzing…" while this runs.
-        _set_job(job_id, stage="Searching literature & synthesizing evidence…")
-        output = run_pipeline(free_text)
+        output = run_pipeline(free_text, on_stage=_on_stage(job_id))
     except Exception as exc:
         app.logger.exception("Async pipeline error (job=%s)", job_id)
         _set_job(
@@ -362,6 +402,8 @@ def analyze_status(job_id):
         "job_id": job_id,
         "status": snapshot["status"],
         "stage": snapshot["stage"],
+        "stages": snapshot.get("stages", []),
+        "current_stage": snapshot.get("current_stage"),
     }
     if snapshot["status"] == "done":
         # Mirror the original /analyze response shape so the UI's renderResults

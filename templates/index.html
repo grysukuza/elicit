@@ -25,6 +25,7 @@
         <span id="spinner-elapsed" class="elapsed-time">0s</span>
         <span id="spinner-poll" class="poll-info"></span>
       </div>
+      <ol id="spinner-stages" class="stage-list"></ol>
     </div>
 
     <!-- ── Results panel ─────────────────────────────────────────── -->
@@ -152,6 +153,44 @@
       if (el) el.textContent = text || '';
     }
 
+    function fmtSecs(s) {
+      if (s == null) return '';
+      if (s < 60) return s.toFixed(1) + 's';
+      const m = Math.floor(s / 60);
+      const r = Math.round(s - m * 60);
+      return m + 'm ' + String(r).padStart(2, '0') + 's';
+    }
+    function renderStages(stages, currentStage) {
+      const ol = document.getElementById('spinner-stages');
+      if (!ol) return;
+      if (!stages || stages.length === 0) { ol.innerHTML = ''; return; }
+      const now = Date.now();
+      ol.innerHTML = stages.map(s => {
+        const isRunning = (s.name === currentStage) && (s.finished_at == null);
+        const isDone    = s.finished_at != null;
+        let dur;
+        if (isDone) {
+          dur = fmtSecs(s.duration_s);
+        } else if (isRunning) {
+          const startMs = Date.parse(s.started_at);
+          dur = fmtSecs(Math.max(0, (now - startMs) / 1000)) + '\u2026';
+        } else {
+          dur = '';
+        }
+        const icon = isDone ? '\u2713' : (isRunning ? '\u25CF' : '\u00B7');
+        const cls  = isDone ? 'done' : (isRunning ? 'running' : '');
+        return '<li class="stage-row ' + cls + '">' +
+                 '<span class="stage-icon">' + icon + '</span>' +
+                 '<span class="stage-label">' + escHtml(s.label) + '</span>' +
+                 '<span class="stage-time">' + dur + '</span>' +
+               '</li>';
+      }).join('');
+    }
+    function clearStages() {
+      const ol = document.getElementById('spinner-stages');
+      if (ol) ol.innerHTML = '';
+    }
+
     function describeNetworkError(msg) {
       // Safari uses "Load failed"; Chrome uses "Failed to fetch"; Firefox "NetworkError".
       // For a short polling request (<10s) any of these means the network blipped.
@@ -179,6 +218,7 @@
           consecutiveErrors = 0;
           if (body.status) setStatusPill(body.status);
           if (body.stage)  setSpinner(true, body.stage);
+          renderStages(body.stages, body.current_stage);
           if (body.status === 'done') {
             setPollInfo('Completed after ' + pollNum + ' check' + (pollNum === 1 ? '' : 's'));
             return {ok: true, data: body};
@@ -208,6 +248,7 @@
       setSpinner(true, 'Submitting analysis\u2026');
       setStatusPill('pending');
       setPollInfo('');
+      clearStages();
       startElapsedClock();
       hideResults();
       hideError();
