@@ -112,7 +112,34 @@ textarea:focus { outline: none; border-color: #2a6496; }
   animation: spin .8s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
-#spinner-msg { color: #555; font-size: 0.9rem; }
+#spinner-msg { color: #555; font-size: 0.9rem; margin: 0; }
+.spinner-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.82rem;
+  color: #5b6b7c;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.status-pill {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: #e6eef7;
+  color: #2a6496;
+  border: 1px solid #c8d8ea;
+}
+.status-pill.running { background: #fff4d6; color: #8a6500; border-color: #f0d264; }
+.status-pill.done    { background: #def5e0; color: #1f6f2c; border-color: #b6e3bd; }
+.status-pill.error   { background: #fde2e2; color: #9b2222; border-color: #f3b8b8; }
+.elapsed-label { color: #8a98a6; }
+.elapsed-time { font-variant-numeric: tabular-nums; font-weight: 600; color: #2a3b4d; }
+.poll-info { color: #8a98a6; font-size: 0.78rem; }
 
 /* ── Results ─────────────────────────────────────────────────── */
 .result-section { margin-bottom: 24px; }

@@ -19,6 +19,12 @@
     <div id="spinner" class="hidden">
       <div class="spinner-ring"></div>
       <p id="spinner-msg">Parsing clinical question&hellip;</p>
+      <div class="spinner-meta">
+        <span id="spinner-status" class="status-pill">pending</span>
+        <span class="elapsed-label">Elapsed:</span>
+        <span id="spinner-elapsed" class="elapsed-time">0s</span>
+        <span id="spinner-poll" class="poll-info"></span>
+      </div>
     </div>
 
     <!-- ── Results panel ─────────────────────────────────────────── -->
@@ -108,6 +114,44 @@
 
     function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
+    // ── Elapsed-timer + status-pill helpers ─────────────────────────
+    let _spinnerStart = null;
+    let _spinnerTick  = null;
+    function fmtElapsed(ms) {
+      const s = Math.floor(ms / 1000);
+      const m = Math.floor(s / 60);
+      const r = s % 60;
+      return m > 0 ? (m + 'm ' + String(r).padStart(2, '0') + 's') : (s + 's');
+    }
+    function startElapsedClock() {
+      _spinnerStart = Date.now();
+      const el = document.getElementById('spinner-elapsed');
+      if (el) el.textContent = '0s';
+      if (_spinnerTick) clearInterval(_spinnerTick);
+      _spinnerTick = setInterval(() => {
+        if (!_spinnerStart) return;
+        const el2 = document.getElementById('spinner-elapsed');
+        if (el2) el2.textContent = fmtElapsed(Date.now() - _spinnerStart);
+      }, 500);
+    }
+    function stopElapsedClock() {
+      if (_spinnerTick) { clearInterval(_spinnerTick); _spinnerTick = null; }
+      _spinnerStart = null;
+    }
+    function setStatusPill(status) {
+      const el = document.getElementById('spinner-status');
+      if (!el) return;
+      el.textContent = status;
+      el.classList.remove('running', 'done', 'error');
+      if (status === 'running' || status === 'done' || status === 'error') {
+        el.classList.add(status);
+      }
+    }
+    function setPollInfo(text) {
+      const el = document.getElementById('spinner-poll');
+      if (el) el.textContent = text || '';
+    }
+
     function describeNetworkError(msg) {
       // Safari uses "Load failed"; Chrome uses "Failed to fetch"; Firefox "NetworkError".
       // For a short polling request (<10s) any of these means the network blipped.
@@ -118,7 +162,10 @@
     async function pollJob(jobId, maxMinutes) {
       const deadline = Date.now() + maxMinutes * 60 * 1000;
       let consecutiveErrors = 0;
+      let pollNum = 0;
       while (Date.now() < deadline) {
+        pollNum += 1;
+        setPollInfo('Check #' + pollNum);
         try {
           const resp = await fetch('/analyze/status/' + encodeURIComponent(jobId), {
             method: 'GET',
@@ -130,12 +177,18 @@
             throw new Error(body.error || ('Status check failed (HTTP ' + resp.status + ')'));
           }
           consecutiveErrors = 0;
-          if (body.stage) setSpinner(true, body.stage);
-          if (body.status === 'done')  return {ok: true,  data: body};
-          if (body.status === 'error') return {ok: false, error: body.error || 'Pipeline failed.'};
+          if (body.status) setStatusPill(body.status);
+          if (body.stage)  setSpinner(true, body.stage);
+          if (body.status === 'done') {
+            setPollInfo('Completed after ' + pollNum + ' check' + (pollNum === 1 ? '' : 's'));
+            return {ok: true, data: body};
+          }
+          if (body.status === 'error') {
+            return {ok: false, error: body.error || 'Pipeline failed.'};
+          }
         } catch (e) {
-          // Tolerate a few transient network/proxy hiccups while polling.
           consecutiveErrors += 1;
+          setPollInfo('Check #' + pollNum + ' \u2014 retrying (' + consecutiveErrors + '/5)');
           if (consecutiveErrors >= 5) {
             const msg = (e && e.message) ? e.message : 'network error';
             return {ok: false, error: describeNetworkError(msg)};
@@ -153,6 +206,9 @@
       if (!text) { showError('Please enter a clinical question.'); return; }
 
       setSpinner(true, 'Submitting analysis\u2026');
+      setStatusPill('pending');
+      setPollInfo('');
+      startElapsedClock();
       hideResults();
       hideError();
 
@@ -557,6 +613,7 @@
       document.getElementById('spinner').classList.toggle('hidden', !show);
       if (msg) document.getElementById('spinner-msg').textContent = msg;
       document.getElementById('analyze-btn').disabled = show;
+      if (!show) stopElapsedClock();
     }
 
     function hideResults() {
