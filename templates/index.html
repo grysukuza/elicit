@@ -239,9 +239,10 @@
         return;
       }
 
-      // 2. Poll for completion (up to 8 minutes)
+      // 2. Poll for completion (up to 20 minutes — the job runs in a
+      // background thread on the server, so this is purely a UI patience cap).
       setSpinner(true, 'Analyzing\u2026');
-      const outcome = await pollJob(jobId, 8);
+      const outcome = await pollJob(jobId, 20);
       setSpinner(false);
       if (!outcome.ok) { showError(outcome.error); return; }
 
