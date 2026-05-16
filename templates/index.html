@@ -108,9 +108,28 @@
 {% block scripts %}
   <script>
     let currentResultId = null;
-    const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]')?.content || '';
-    function csrfHeaders(extra) {
-      return Object.assign({'X-CSRF-Token': CSRF_TOKEN}, extra || {});
+    let CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]')?.content || '';
+    let CSRF_TOKEN_FETCHED_AT = Date.now();
+    // Refresh the token if it's older than 30 min, so a long-open tab can't
+    // submit with an expired token.
+    async function getFreshCsrf() {
+      const ageMs = Date.now() - CSRF_TOKEN_FETCHED_AT;
+      if (CSRF_TOKEN && ageMs < 30 * 60 * 1000) return CSRF_TOKEN;
+      try {
+        const r = await fetch('/csrf', {credentials: 'same-origin', cache: 'no-store'});
+        if (r.ok) {
+          const j = await r.json();
+          if (j && j.token) {
+            CSRF_TOKEN = j.token;
+            CSRF_TOKEN_FETCHED_AT = Date.now();
+          }
+        }
+      } catch (_) { /* fall back to stale token; server will 400 with clear msg */ }
+      return CSRF_TOKEN;
+    }
+    async function csrfHeaders(extra) {
+      const tok = await getFreshCsrf();
+      return Object.assign({'X-CSRF-Token': tok}, extra || {});
     }
 
     function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -258,7 +277,7 @@
       try {
         const resp = await fetch('/analyze', {
           method: 'POST',
-          headers: csrfHeaders({'Content-Type': 'application/json'}),
+          headers: await csrfHeaders({'Content-Type': 'application/json'}),
           body: JSON.stringify({text}),
         });
         let parsed = {};
@@ -502,7 +521,7 @@
       try {
         const resp = await fetch('/evaluate-paper', {
           method: 'POST',
-          headers: csrfHeaders({'Content-Type': 'application/json'}),
+          headers: await csrfHeaders({'Content-Type': 'application/json'}),
           body: JSON.stringify({result_id: currentResultId, paper_index: idx}),
         });
         const data = await resp.json();
@@ -636,7 +655,7 @@
       try {
         const resp = await fetch('/send-email', {
           method: 'POST',
-          headers: csrfHeaders({'Content-Type': 'application/json'}),
+          headers: await csrfHeaders({'Content-Type': 'application/json'}),
           body: JSON.stringify({email, result_id: currentResultId}),
         });
         let data = {};

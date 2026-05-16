@@ -297,6 +297,25 @@ def _enforce_csrf():
     # 401 "Invalid or missing API key" from the api_key_required decorator.
     if request.path.startswith("/api/"):
         return None
+    # Defense-in-depth: same-origin check on state-changing web requests.
+    # Our CSRF tokens are stateless HMAC (not session-bound, so they survive
+    # third-party-cookie blocking in iframes), which means a leaked token
+    # could in theory be replayed cross-site. Requiring Origin/Referer to
+    # match the request host closes that gap for any browser that sends
+    # either header (all modern browsers do on POST).
+    origin = request.headers.get("Origin") or request.headers.get("Referer")
+    if origin:
+        try:
+            from urllib.parse import urlparse
+            o_host = urlparse(origin).netloc
+            if o_host and o_host != request.host:
+                app.logger.warning(
+                    "Origin mismatch path=%s origin=%s host=%s",
+                    request.path, o_host, request.host,
+                )
+                return ("Cross-origin request rejected.", 400)
+        except Exception:
+            pass
     # Stateless HMAC-signed CSRF token — validated without needing the
     # session cookie (which may be blocked by third-party cookie policies
     # when the app is embedded in a cross-site iframe like Replit's preview).
@@ -338,6 +357,15 @@ def _own_result(result_id: str | None) -> dict | None:
 @auth.login_required
 def index():
     return render_template("index.html")
+
+
+@app.route("/csrf")
+@auth.login_required
+def csrf_token_endpoint():
+    """Return a fresh CSRF token. Used by the JS client to avoid stale-token
+    rejections after the user has had a tab open for a long time.
+    Login-required so unauthenticated callers can't mint tokens."""
+    return jsonify({"token": auth.get_csrf_token()})
 
 
 @app.route("/analyze", methods=["POST"])

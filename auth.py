@@ -488,7 +488,7 @@ def safe_next_url(target: Optional[str], default: str = "/") -> str:
 
 CSRF_FIELD = "csrf_token"
 CSRF_HEADER = "X-CSRF-Token"
-CSRF_TTL_SECONDS = 8 * 3600  # 8 hours
+CSRF_TTL_SECONDS = 24 * 3600  # 24 hours
 import hmac as _hmac
 import hashlib as _hashlib
 import base64 as _b64
