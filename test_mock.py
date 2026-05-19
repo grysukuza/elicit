@@ -147,7 +147,7 @@ print("=" * 60)
 from pdf_generator import generate_pdf
 
 pdf_bytes = generate_pdf(mock_result)
-pdf_path = "/Users/kuzak/Documents/python/elicit/sample_report.pdf"
+pdf_path = os.path.join(os.getcwd(), "sample_report.pdf")
 with open(pdf_path, "wb") as f:
     f.write(pdf_bytes)
 
