@@ -880,11 +880,21 @@ def admin_panel():
         {**dict(p), "reset_url": url_for("reset", token=p["token"], _external=True)}
         for p in pending
     ]
+    total_users = len(users)
+    admin_count = sum(1 for u in users if u["is_admin"])
+    smtp_configured = bool(_smtp_settings()["host"])
     return render_template(
         "admin.html",
         users=users,
         pending=pending_with_urls,
-        smtp_configured=bool(_smtp_settings()["host"]),
+        smtp_configured=smtp_configured,
+        stats={
+            "total_users": total_users,
+            "standard_users": total_users - admin_count,
+            "admin_users": admin_count,
+            "pending_resets": len(pending_with_urls),
+            "smtp_status": "Configured" if smtp_configured else "Not configured",
+        },
     )
 
 
