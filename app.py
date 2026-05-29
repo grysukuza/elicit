@@ -359,6 +359,16 @@ def index():
     return render_template("index.html")
 
 
+@app.route("/templates/index.html")
+def legacy_index_path():
+    """Redirect accidental direct template-path visits to the real app route.
+
+    Users sometimes paste or click `/templates/index.html`, which is a source
+    path on disk rather than a served URL in this Flask app.
+    """
+    return redirect(url_for("index"))
+
+
 @app.route("/csrf")
 @auth.login_required
 def csrf_token_endpoint():
