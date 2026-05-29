@@ -217,6 +217,11 @@
              'Please check your connection and try again. (' + msg + ')';
     }
 
+    function describeMissingJobError() {
+      return 'Analysis job id was not found by the server. This usually means the app restarted ' +
+             'or the job expired before completion. Please run Analyze again.';
+    }
+
     async function pollJob(jobId, maxMinutes) {
       const deadline = Date.now() + maxMinutes * 60 * 1000;
       let consecutiveErrors = 0;
@@ -232,7 +237,10 @@
           let body = {};
           try { body = await resp.json(); } catch (_) {}
           if (!resp.ok) {
-            throw new Error(body.error || ('Status check failed (HTTP ' + resp.status + ')'));
+            const msg = body.error || ('Status check failed (HTTP ' + resp.status + ')');
+            const err = new Error(msg);
+            err.httpStatus = resp.status;
+            throw err;
           }
           consecutiveErrors = 0;
           if (body.status) setStatusPill(body.status);
@@ -246,12 +254,18 @@
             return {ok: false, error: body.error || 'Pipeline failed.'};
           }
         } catch (e) {
+          const msg = (e && e.message) ? e.message : 'network error';
+          if (e && e.httpStatus === 404 && /unknown or expired job id/i.test(msg)) {
+            return {ok: false, error: describeMissingJobError()};
+          }
           consecutiveErrors += 1;
           setPollInfo('Check #' + pollNum + ' \u2014 retrying (' + consecutiveErrors + '/5)');
           if (consecutiveErrors >= 5) {
-            const msg = (e && e.message) ? e.message : 'network error';
             return {ok: false, error: describeNetworkError(msg)};
           }
+          const backoffMs = Math.min(10000, 2000 * Math.pow(2, consecutiveErrors - 1));
+          await sleep(backoffMs);
+          continue;
         }
         await sleep(2000);
       }
@@ -705,5 +719,14 @@
       if (fmt === 'f3')  return val.toFixed(3);
       return val;
     }
+
+    (function warnIfOpenedAsLocalFile() {
+      if (window.location.protocol !== 'file:') return;
+      showError(
+        'This app cannot run by opening templates/index.html directly from disk. ' +
+        'Start the Flask server and open the app URL (for example http://localhost:5000/).'
+      );
+      setSpinner(false);
+    })();
   </script>
 {% endblock %}
